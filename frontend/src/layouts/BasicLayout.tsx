@@ -1,4 +1,4 @@
-import { App, Avatar, Button, Layout, Menu, Space, Tag, Typography } from 'antd';
+import { App, Avatar, Badge, Button, Layout, Menu, Space, Tag, Tooltip, Typography } from 'antd';
 import {
   BookOutlined,
   ControlOutlined,
@@ -10,10 +10,32 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/authStore';
 import { authApi } from '@/api/auth';
+import { tasksApi } from '@/api/tasks';
+import { useSseTasks } from '@/hooks/useSseTasks';
 
 const { Sider, Header, Content } = Layout;
+
+/** 顶栏任务活动徽标:SSE 失效 + 30s 轮询兜底 */
+function TaskActivityBadge() {
+  const navigate = useNavigate();
+  const connected = useSseTasks(true);
+  const { data } = useQuery({
+    queryKey: ['task-badge'],
+    queryFn: () => tasksApi.list({ page: 1, size: 1, status: 1 }),
+    refetchInterval: 30000,
+  });
+  const running = data?.total ?? 0;
+  return (
+    <Tooltip title={connected ? `实时推送已连接 · ${running} 个任务进行中` : `${running} 个任务进行中(推送未连接)`}>
+      <Badge count={running} size="small" offset={[-2, 2]}>
+        <Button icon={<ThunderboltOutlined />} onClick={() => navigate('/tasks')} />
+      </Badge>
+    </Tooltip>
+  );
+}
 
 function selectedKeyOf(pathname: string): string {
   if (pathname === '/') return '/';
@@ -88,6 +110,7 @@ export function BasicLayout() {
           }}
         >
           <Space>
+            <TaskActivityBadge />
             <Avatar size={28} icon={<UserOutlined />} style={{ backgroundColor: '#6366f1' }} />
             <Typography.Text strong>{user?.username ?? '未登录'}</Typography.Text>
             {user && (

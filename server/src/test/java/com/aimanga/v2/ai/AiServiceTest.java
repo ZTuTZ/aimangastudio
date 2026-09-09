@@ -3,6 +3,7 @@ package com.aimanga.v2.ai;
 import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.service.ConfigService;
 import com.aimanga.v2.storage.StorageService;
+import com.aimanga.v2.task.RedisSemaphores;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -37,7 +38,9 @@ class AiServiceTest {
         server.start();
         configService = mock(ConfigService.class);
         storageService = mock(StorageService.class);
-        aiService = new AiService(configService, new AiClient(new ObjectMapper()), storageService, new ObjectMapper());
+        RedisSemaphores semaphores = mock(RedisSemaphores.class);
+        when(semaphores.acquireAi(anyString())).thenReturn(true);
+        aiService = new AiService(configService, new AiClient(new ObjectMapper()), storageService, new ObjectMapper(), semaphores);
         when(configService.getString(anyString())).thenAnswer(inv -> switch (inv.getArgument(0, String.class)) {
             case "ai_text_api_url", "ai_image_api_url" -> server.url("/").toString();
             case "ai_text_api_key", "ai_image_api_key" -> "sk-test";
