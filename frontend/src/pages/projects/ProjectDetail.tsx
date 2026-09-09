@@ -1,4 +1,4 @@
-import { App, AutoComplete, Button, Card, Descriptions, Form, Input, Modal, Segmented, Select, Space, Table, Tabs, Tag, Tooltip, Typography, Upload } from 'antd';
+import { App, AutoComplete, Button, Card, Form, Input, Modal, Segmented, Select, Space, Table, Tabs, Tag, Tooltip, Typography, Upload } from 'antd';
 import { ArrowLeftOutlined, EditOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -47,69 +47,73 @@ export function ProjectDetail() {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* 基本信息(保持原状,仅扩充元数据展示 + 编辑入口) */}
+      {/* 基本信息:封面 + 标题 + 状态/元数据 主视觉布局 */}
       <Card styles={{ body: { padding: 20 } }}>
-        <div className="flex items-center justify-between">
-          <Space>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/')} />
-            <div>
-              <Typography.Title level={4} style={{ margin: 0 }}>
+        <div className="flex gap-5">
+          <div className="w-24 h-32 rounded-xl overflow-hidden flex-shrink-0 shadow-sm">
+            {project.coverUrl ? (
+              <img src={project.coverUrl} alt={project.title} className="w-full h-full object-cover" />
+            ) : (
+              <div
+                className="w-full h-full flex items-center justify-center text-white text-3xl font-bold"
+                style={{ background: 'linear-gradient(135deg,#6366f1,#a855f7)' }}
+              >
+                {project.title.slice(0, 1)}
+              </div>
+            )}
+          </div>
+          <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+            <div className="flex items-start justify-between gap-3">
+              <Typography.Title level={4} style={{ margin: 0 }} ellipsis={{ tooltip: project.title }}>
                 {project.title}
               </Typography.Title>
-              <Typography.Text type="secondary">{project.tagline || '暂无简介'}</Typography.Text>
+              <Space className="flex-shrink-0">
+                <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/')} title="返回作品库" />
+                <PresetSelect projectId={projectId} value={project.stylePresetId} presets={presets ?? []} />
+                <Button icon={<EditOutlined />} onClick={() => setInfoModalOpen(true)}>
+                  编辑信息
+                </Button>
+              </Space>
             </div>
-          </Space>
-          <Space>
-            <PresetSelect projectId={projectId} value={project.stylePresetId} presets={presets ?? []} />
-            <Button icon={<EditOutlined />} onClick={() => setInfoModalOpen(true)}>
-              编辑信息
-            </Button>
-          </Space>
+            {project.tagline && (
+              <Typography.Text type="secondary" ellipsis={{ tooltip: project.tagline }}>
+                {project.tagline}
+              </Typography.Text>
+            )}
+            <Space size={6} wrap>
+              <ProjectStatusTag status={project.status} />
+              <SeriesStatusTag status={project.seriesStatus} />
+              {project.category && <Tag bordered={false}>{project.category}</Tag>}
+              <ColorModeTag mode={project.colorMode} />
+              <Tag bordered={false}>{project.aspectRatio}</Tag>
+            </Space>
+            {tagList.length > 0 && (
+              <Space size={4} wrap>
+                {tagList.map((t) => (
+                  <Tag key={t} bordered={false} style={{ marginRight: 0, background: '#eef2ff', color: '#6366f1' }}>
+                    #{t}
+                  </Tag>
+                ))}
+              </Space>
+            )}
+            <Tooltip title={`${project.contentUid}（点击复制）`}>
+              <div>
+                <Typography.Text
+                  code
+                  type="secondary"
+                  copyable={{ text: project.contentUid, tooltips: ['复制内容 ID', '已复制'] }}
+                  style={{ fontSize: 12, maxWidth: 420 }}
+                  ellipsis
+                >
+                  {project.contentUid}
+                </Typography.Text>
+              </div>
+            </Tooltip>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              创建于 {project.createTime} · {chapterCount} 话 / {project.pageCount} 页
+            </Typography.Text>
+          </div>
         </div>
-        <Descriptions
-          size="small"
-          className="mt-4"
-          column={4}
-          items={[
-            { key: 'status', label: '状态', children: <ProjectStatusTag status={project.status} /> },
-            { key: 'aspect', label: '画幅', children: project.aspectRatio },
-            { key: 'color', label: '色彩模式', children: <ColorModeTag mode={project.colorMode} /> },
-            { key: 'counts', label: '规模', children: `${project.chapterCount} 话 / ${project.pageCount} 页` },
-            {
-              key: 'series',
-              label: '连载状态',
-              children: <SeriesStatusTag status={project.seriesStatus} />,
-            },
-            { key: 'category', label: '主分类', children: project.category || '—' },
-            {
-              key: 'tags',
-              label: '标签',
-              children:
-                tagList.length > 0 ? (
-                  <Space size={4} wrap>
-                    {tagList.map((t) => (
-                      <Tag key={t} bordered={false} style={{ marginRight: 0 }}>
-                        {t}
-                      </Tag>
-                    ))}
-                  </Space>
-                ) : (
-                  '—'
-                ),
-            },
-            {
-              key: 'uid',
-              label: '内容 ID',
-              children: (
-                <Tooltip title={project.contentUid}>
-                  <Typography.Text code copyable={{ text: project.contentUid }} style={{ fontSize: 12 }}>
-                    {project.contentUid}
-                  </Typography.Text>
-                </Tooltip>
-              ),
-            },
-          ]}
-        />
       </Card>
 
       {/* 三个工作区改为 Tab */}
