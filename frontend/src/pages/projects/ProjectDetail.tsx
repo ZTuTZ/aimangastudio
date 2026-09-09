@@ -6,6 +6,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ComingSoon } from '@/components/ComingSoon';
 import {
   ASSET_TYPE_NAMES,
+  PROJECT_STATUS,
   projectsApi,
   type AssetVO,
   type ChapterVO,
@@ -154,15 +155,12 @@ export function ProjectDetail() {
 }
 
 function ProjectStatusTag({ status }: { status: number }) {
-  const map: Record<number, { label: string; color: string }> = {
-    0: { label: '准备中', color: 'default' },
-    1: { label: '待出图', color: 'blue' },
-    2: { label: '出图中', color: 'processing' },
-    3: { label: '完成', color: 'green' },
-    4: { label: '部分失败', color: 'orange' },
-  };
-  const s = map[status] ?? { label: '未知', color: 'default' };
-  return <Tag color={s.color}>{s.label}</Tag>;
+  const meta = PROJECT_STATUS[status] ?? { label: '未知', color: 'default' };
+  return (
+    <Tag color={meta.color} bordered={false} style={{ marginRight: 0 }}>
+      {meta.label}
+    </Tag>
+  );
 }
 
 function ColorModeTag({ mode }: { mode: string }) {

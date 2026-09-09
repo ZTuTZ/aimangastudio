@@ -137,9 +137,9 @@ export const ASSET_TYPE_NAMES: Record<number, string> = {
 };
 
 export const PROJECT_STATUS: Record<number, { label: string; color: string }> = {
-  0: { label: '准备中', color: 'default' },
+  0: { label: '准备中', color: 'cyan' },
   1: { label: '待出图', color: 'blue' },
-  2: { label: '出图中', color: 'processing' },
+  2: { label: '出图中', color: 'geekblue' },
   3: { label: '完成', color: 'green' },
   4: { label: '部分失败', color: 'orange' },
 };
