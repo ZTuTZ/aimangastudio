@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 
 export interface CurrentUser {
   id: number;
@@ -8,15 +9,24 @@ export interface CurrentUser {
 
 interface AuthState {
   token: string | null;
+  refreshToken: string | null;
   user: CurrentUser | null;
-  setAuth: (token: string, user: CurrentUser) => void;
+  setAuth: (token: string, refreshToken: string, user: CurrentUser) => void;
+  setUser: (user: CurrentUser) => void;
   clear: () => void;
 }
 
-/** 认证状态(T2.1 接入真实登录;持久化到 localStorage 一并在此任务完成) */
-export const useAuthStore = create<AuthState>()((set) => ({
-  token: null,
-  user: null,
-  setAuth: (token, user) => set({ token, user }),
-  clear: () => set({ token: null, user: null }),
-}));
+/** 认证状态(localStorage 持久化;http.ts 依赖本 store 注入/刷新 token) */
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set) => ({
+      token: null,
+      refreshToken: null,
+      user: null,
+      setAuth: (token, refreshToken, user) => set({ token, refreshToken, user }),
+      setUser: (user) => set({ user }),
+      clear: () => set({ token: null, refreshToken: null, user: null }),
+    }),
+    { name: 'aimanga-v2-auth' },
+  ),
+);

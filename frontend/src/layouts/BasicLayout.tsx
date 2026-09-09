@@ -1,28 +1,41 @@
-import { Avatar, Layout, Menu, Space, Tag, Typography } from 'antd';
+import { App, Avatar, Button, Layout, Menu, Space, Tag, Typography } from 'antd';
 import {
   BookOutlined,
-  ThunderboltOutlined,
-  SettingOutlined,
-  UserOutlined,
-  TeamOutlined,
   ControlOutlined,
-  PictureOutlined,
   MonitorOutlined,
+  PictureOutlined,
+  SettingOutlined,
+  TeamOutlined,
+  ThunderboltOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useAuthStore } from '@/stores/authStore';
+import { authApi } from '@/api/auth';
 
 const { Sider, Header, Content } = Layout;
 
 function selectedKeyOf(pathname: string): string {
   if (pathname === '/') return '/';
-  const seg = '/' + pathname.split('/')[1];
   if (pathname.startsWith('/projects/')) return '/projects';
-  return seg;
+  return '/' + pathname.split('/')[1];
 }
 
 export function BasicLayout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const { message } = App.useApp();
+  const user = useAuthStore((s) => s.user);
+  const refreshToken = useAuthStore((s) => s.refreshToken);
+  const clear = useAuthStore((s) => s.clear);
+  const isAdmin = user?.role === 'ADMIN';
+
+  const onLogout = () => {
+    authApi.logout(refreshToken);
+    clear();
+    message.success('已退出登录');
+    navigate('/login', { replace: true });
+  };
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -35,7 +48,7 @@ export function BasicLayout() {
             A
           </div>
           <Typography.Text strong>AIMangaStudio</Typography.Text>
-          <Tag color="indigo" style={{ marginInlineEnd: 0 }}>
+          <Tag color="purple" style={{ marginInlineEnd: 0 }}>
             v2
           </Tag>
         </div>
@@ -48,12 +61,19 @@ export function BasicLayout() {
             { key: '/', icon: <BookOutlined />, label: '作品库' },
             { key: '/tasks', icon: <ThunderboltOutlined />, label: '任务中心' },
             { key: '/settings', icon: <SettingOutlined />, label: '个人设置' },
-            { type: 'group', label: '管理后台', children: [
-              { key: '/admin/users', icon: <TeamOutlined />, label: '账号管理' },
-              { key: '/admin/configs', icon: <ControlOutlined />, label: '系统配置' },
-              { key: '/admin/presets', icon: <PictureOutlined />, label: '风格预设' },
-              { key: '/admin/tasks', icon: <MonitorOutlined />, label: '任务监控' },
-            ] },
+            ...(isAdmin
+              ? [{
+                  key: 'admin-group',
+                  type: 'group' as const,
+                  label: '管理后台',
+                  children: [
+                    { key: '/admin/users', icon: <TeamOutlined />, label: '账号管理' },
+                    { key: '/admin/configs', icon: <ControlOutlined />, label: '系统配置' },
+                    { key: '/admin/presets', icon: <PictureOutlined />, label: '风格预设' },
+                    { key: '/admin/tasks', icon: <MonitorOutlined />, label: '任务监控' },
+                  ],
+                }]
+              : []),
           ]}
         />
       </Sider>
@@ -68,8 +88,16 @@ export function BasicLayout() {
           }}
         >
           <Space>
-            <Avatar size={28} icon={<UserOutlined />} />
-            <Typography.Text type="secondary">未登录（T2.1 接入）</Typography.Text>
+            <Avatar size={28} icon={<UserOutlined />} style={{ backgroundColor: '#6366f1' }} />
+            <Typography.Text strong>{user?.username ?? '未登录'}</Typography.Text>
+            {user && (
+              <Tag color={isAdmin ? 'gold' : 'blue'} style={{ marginInlineEnd: 8 }}>
+                {isAdmin ? '管理员' : '用户'}
+              </Tag>
+            )}
+            <Button size="small" onClick={onLogout}>
+              退出登录
+            </Button>
           </Space>
         </Header>
         <Content style={{ padding: 24, overflow: 'auto' }}>

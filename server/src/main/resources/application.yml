@@ -8,6 +8,11 @@ server:
 spring:
   application:
     name: aimanga-v2
+  # 不使用 Shiro 注解鉴权(全部走过滤器),排除其自动配置:
+  # 否则 DefaultAdvisorAutoProxyCreator 会把 ServiceImpl 代理成 JDK 接口代理,破坏具体类注入
+  autoconfigure:
+    exclude:
+      - org.apache.shiro.spring.boot.autoconfigure.ShiroAnnotationProcessorAutoConfiguration
   # 开发默认 local(含本机 MySQL 密码的 application-local.yml,已 gitignore);
   # 生产部署必须显式设置 SPRING_PROFILES_ACTIVE=prod 且通过环境变量注入全部敏感配置
   profiles:

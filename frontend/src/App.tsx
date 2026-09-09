@@ -1,5 +1,7 @@
+import type { ReactElement } from 'react';
 import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import { BasicLayout } from '@/layouts/BasicLayout';
+import { RequireAuth, RequireAdmin, RedirectIfAuthed } from '@/components/Guards';
 import { Login } from '@/pages/Login';
 import { ProjectList } from '@/pages/projects/ProjectList';
 import { ProjectDetail } from '@/pages/projects/ProjectDetail';
@@ -13,27 +15,27 @@ import { TaskMonitor } from '@/pages/admin/TaskMonitor';
 import { NotFound } from '@/pages/NotFound';
 
 const router = createBrowserRouter([
-  { path: '/login', element: <Login /> },
+  { path: '/login', element: <RedirectIfAuthed><Login /></RedirectIfAuthed> },
   {
     path: '/',
-    element: <BasicLayout />,
+    element: <RequireAuth><BasicLayout /></RequireAuth>,
     children: [
       { index: true, element: <ProjectList /> },
       { path: 'projects/:id', element: <ProjectDetail /> },
       { path: 'projects/:id/pages/:pageId', element: <PageDetail /> },
       { path: 'tasks', element: <TaskCenter /> },
       { path: 'settings', element: <ChangePassword /> },
-      // 管理端(T2.1 接入真实角色守卫)
-      { path: 'admin/users', element: <UserManage /> },
-      { path: 'admin/configs', element: <SystemConfig /> },
-      { path: 'admin/presets', element: <PresetManage /> },
-      { path: 'admin/tasks', element: <TaskMonitor /> },
+      // 管理端:仅 ADMIN
+      { path: 'admin/users', element: <RequireAdmin><UserManage /></RequireAdmin> },
+      { path: 'admin/configs', element: <RequireAdmin><SystemConfig /></RequireAdmin> },
+      { path: 'admin/presets', element: <RequireAdmin><PresetManage /></RequireAdmin> },
+      { path: 'admin/tasks', element: <RequireAdmin><TaskMonitor /></RequireAdmin> },
     ],
   },
   { path: '/403', element: <NotFound title="403" subTitle="没有权限访问该页面" /> },
   { path: '*', element: <NotFound /> },
 ]);
 
-export default function App() {
+export default function App(): ReactElement {
   return <RouterProvider router={router} />;
 }
