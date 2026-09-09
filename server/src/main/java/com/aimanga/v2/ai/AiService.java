@@ -108,9 +108,10 @@ public class AiService {
                 configService.getString(prefix + "api_url"),
                 configService.getString(prefix + "api_key"),
                 configService.getString(prefix + "model"),
-                configService.getInt(prefix + "timeout", 120000));
+                configService.getInt(prefix + "timeout", 120000),
+                configService.getString(prefix + "protocol"));
         if (config.model() == null || config.model().isBlank()) {
-            config = new ChatConfig(config.apiUrl(), config.apiKey(), "gemini-2.5-flash", config.timeoutMs());
+            config = new ChatConfig(config.apiUrl(), config.apiKey(), "gemini-2.5-flash", config.timeoutMs(), config.protocol());
         }
         return config;
     }

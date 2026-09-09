@@ -47,14 +47,14 @@ export function UploadStoriesModal({ open, onClose }: UploadStoriesModalProps) {
           return;
         }
         const created = await projectsApi.importFiles(files, settings);
-        message.success(`已导入 ${created.length} 部作品(准备流水线将在任务系统上线后自动开始)`);
+        message.success(`已导入 ${created.length} 部作品,准备流水线已自动开始(拆话→脚本→资产→设定表)`);
       } else {
         if (!title.trim() || !sourceText.trim()) {
           message.warning('请填写标题与故事原文');
           return;
         }
         await projectsApi.create({ title: title.trim(), sourceText: sourceText.trim(), ...settings });
-        message.success('作品已创建(准备流水线将在任务系统上线后自动开始)');
+        message.success('作品已创建,准备流水线已自动开始(拆话→脚本→资产→设定表)');
       }
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       close();

@@ -45,14 +45,56 @@ public class AiClient {
 
     // ---------- 文本 ----------
 
-    /** 文本对话:走 Gemini 兼容端点,响应多格式解析 */
+    /** 文本对话:按协议分派(Gemini generateContent / OpenAI chat.completions),响应多格式解析 */
     public String chatText(ChatConfig cfg, String prompt, List<String> images) {
-        JsonNode data = postGenerateContent(cfg, prompt, images, false, null);
+        JsonNode data = cfg.openaiProtocol()
+                ? postChatCompletions(cfg, prompt, images)
+                : postGenerateContent(cfg, prompt, images, false, null);
         String text = extractText(data);
         if (text == null || text.isBlank()) {
             throw new BusinessException(502, "模型未返回文本");
         }
         return text;
+    }
+
+    /** OpenAI 兼容文本对话(智谱 GLM / DeepSeek / OpenAI 系) */
+    private JsonNode postChatCompletions(ChatConfig cfg, String prompt, List<String> images) {
+        if (blank(cfg.apiUrl()) || blank(cfg.apiKey())) {
+            throw new BusinessException(400, "请先在系统配置中填写 AI 接口地址与 API Key");
+        }
+        try {
+            ObjectNode message = objectMapper.createObjectNode().put("role", "user");
+            if (images == null || images.isEmpty()) {
+                message.put("content", prompt);
+            } else {
+                var content = objectMapper.createArrayNode();
+                content.addObject().put("type", "text").put("text", prompt);
+                for (String image : images) {
+                    content.addObject().put("type", "image_url")
+                            .set("image_url", objectMapper.createObjectNode().put("url", image));
+                }
+                message.set("content", content);
+            }
+            ObjectNode body = objectMapper.createObjectNode()
+                    .put("model", cfg.model())
+                    .set("messages", objectMapper.createArrayNode().add(message));
+            HttpRequest request = HttpRequest.newBuilder(URI.create(cfg.apiUrl() + "/chat/completions"))
+                    .timeout(Duration.ofMillis(cfg.timeoutMs()))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + cfg.apiKey())
+                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
+                    .build();
+            HttpResponse<String> response = send(request, cfg.timeoutMs());
+            String raw = response.body();
+            if (response.statusCode() >= 400) {
+                throw new BusinessException(502, httpError(response.statusCode(), raw));
+            }
+            return objectMapper.readTree(raw);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BusinessException(502, "AI 请求失败: " + e.getMessage());
+        }
     }
 
     private JsonNode postGenerateContent(ChatConfig cfg, String prompt, List<String> images,
@@ -111,6 +153,11 @@ public class AiClient {
         } catch (Exception e) {
             throw new BusinessException(502, "AI 请求失败: " + e.getMessage());
         }
+    }
+
+    private HttpResponse<String> send(HttpRequest request, long timeoutMs) throws Exception {
+        CompletableFuture<HttpResponse<String>> future = http.sendAsync(request, HttpResponse.BodyHandlers.ofString());
+        return future.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     // ---------- 生图 ----------

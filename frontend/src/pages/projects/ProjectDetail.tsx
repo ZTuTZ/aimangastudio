@@ -1,7 +1,7 @@
-import { App, AutoComplete, Button, Card, Form, Input, Modal, Segmented, Select, Space, Table, Tabs, Tag, Tooltip, Typography, Upload } from 'antd';
-import { ArrowLeftOutlined, EditOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
+import { App, AutoComplete, Button, Card, Form, Input, Modal, Popconfirm, Segmented, Select, Space, Table, Tabs, Tag, Tooltip, Typography, Upload } from 'antd';
+import { ArrowLeftOutlined, EditOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ComingSoon } from '@/components/ComingSoon';
 import {
@@ -12,6 +12,7 @@ import {
   projectsApi,
   type AssetVO,
   type ChapterVO,
+  type PageVO,
   type ProjectVO,
 } from '@/api/projects';
 
@@ -124,13 +125,21 @@ export function ProjectDetail() {
             {
               key: 'chapters',
               label: `话 / 章节 (${chapterCount})`,
-              children: <ChaptersTab chapters={chapters ?? []} onEdit={(chapter) => setChapterModal({ open: true, chapter })} onAdd={() => setChapterModal({ open: true })} />,
+              children: (
+                <ChaptersTab
+                  projectId={projectId}
+                  chapters={chapters ?? []}
+                  onEdit={(chapter) => setChapterModal({ open: true, chapter })}
+                  onAdd={() => setChapterModal({ open: true })}
+                />
+              ),
             },
             {
               key: 'assets',
               label: `资产库 (${assetCount})`,
               children: (
                 <AssetsTab
+                  projectId={projectId}
                   assets={assets ?? []}
                   category={assetCategory}
                   onCategoryChange={setAssetCategory}
@@ -311,24 +320,61 @@ function InfoEditModal({
   );
 }
 
-/** 话 / 章节 Tab */
-function ChaptersTab({
-  chapters,
-  onEdit,
-  onAdd,
-}: {
+/** 话 / 章节 Tab:重拆话 + 展开页脚本编辑 + 单话重跑脚本 */
+function ChaptersTab({ projectId, chapters, onEdit, onAdd }: {
+  projectId: number;
   chapters: ChapterVO[];
   onEdit: (chapter: ChapterVO) => void;
   onAdd: () => void;
 }) {
+  const { message } = App.useApp();
+  const queryClient = useQueryClient();
+
+  const runTask = async (action: () => Promise<unknown>, okText: string) => {
+    try {
+      await action();
+      message.success(okText);
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '操作失败');
+    }
+  };
+
   return (
     <div>
+      <div className="flex items-center gap-2 mb-3">
+        <Button size="small" icon={<PlusOutlined />} onClick={onAdd}>
+          新增话
+        </Button>
+        <Popconfirm
+          title="重新拆话?"
+          description="将按原文重新拆分并删除现有话记录(已生成的页内容会被清除)。生成中的任务不受影响。"
+          okText="重新拆话"
+          okButtonProps={{ danger: true }}
+          cancelText="取消"
+          onConfirm={async () => {
+            try {
+              await projectsApi.split(projectId);
+              message.success('拆话任务已创建,可到任务中心查看进度');
+              queryClient.invalidateQueries({ queryKey: ['tasks'] });
+            } catch (e) {
+              message.error(e instanceof Error ? e.message : '操作失败');
+            }
+          }}
+        >
+          <Button size="small">重新拆话</Button>
+        </Popconfirm>
+      </div>
       <Table<ChapterVO>
         rowKey="id"
         size="small"
         dataSource={chapters}
         pagination={false}
-        locale={{ emptyText: '暂无话/章节 —— 上传作品后,任务系统将自动拆话并生成脚本(Phase 5)' }}
+        expandable={{
+          expandedRowRender: (chapter) => <PagesOfChapter chapterId={chapter.id} />,
+          rowExpandable: (chapter) => chapter.pageCount > 0 || chapter.status >= 2,
+        }}
+        locale={{ emptyText: '暂无话/章节 —— 拆话任务完成后自动出现' }}
         columns={[
           { title: '话号', dataIndex: 'chapterNo', width: 70 },
           { title: '标题', dataIndex: 'title' },
@@ -337,43 +383,208 @@ function ChaptersTab({
             dataIndex: 'status',
             width: 110,
             render: (s: number) =>
-              s === 2 ? <Tag color="green" bordered={false}>脚本就绪</Tag> : s === 0 ? <Tag bordered={false}>待处理</Tag> : <Tag color="blue" bordered={false}>处理中</Tag>,
+              s >= 2 ? <Tag color="green" bordered={false}>脚本就绪</Tag> : s === 0 ? <Tag bordered={false}>待处理</Tag> : <Tag color="blue" bordered={false}>处理中</Tag>,
           },
           { title: '页数', dataIndex: 'pageCount', width: 70 },
           {
             title: '操作',
-            width: 80,
+            width: 170,
             render: (_, row) => (
-              <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => onEdit(row)}>
+              <Space size={0}>
+                <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => onEdit(row)}>
+                  编辑
+                </Button>
+                <Popconfirm title={`重新生成「${row.title}」的脚本?`} description="该话现有页与生成图将被重建" okText="重跑" cancelText="取消"
+                  onConfirm={() => runTask(() => projectsApi.regenerateScript(row.id), '脚本生成任务已创建')}>
+                  <Button type="link" size="small" style={{ paddingInline: 4 }}>
+                    重跑脚本
+                  </Button>
+                </Popconfirm>
+              </Space>
+            ),
+          },
+        ]}
+      />
+    </div>
+  );
+}
+
+/** 话内页脚本(只读概览 + 单页编辑) */
+function PagesOfChapter({ chapterId }: { chapterId: number }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['pages', chapterId],
+    queryFn: () => projectsApi.pages(chapterId),
+  });
+  const [editing, setEditing] = useState<PageVO | null>(null);
+
+  return (
+    <div className="pl-6 pr-2 pb-2">
+      <Table<PageVO>
+        rowKey="id"
+        size="small"
+        loading={isLoading}
+        dataSource={data ?? []}
+        pagination={false}
+        locale={{ emptyText: '该话暂无页' }}
+        columns={[
+          { title: '页号', dataIndex: 'pageNo', width: 60 },
+          {
+            title: '旁白',
+            dataIndex: 'narration',
+            ellipsis: true,
+            render: (v: string | null) => v || '—',
+          },
+          {
+            title: '对白',
+            key: 'dialogue',
+            ellipsis: true,
+            render: (_, row) => {
+              try {
+                const list = JSON.parse(row.dialogue ?? '[]');
+                if (!Array.isArray(list) || list.length === 0) return '—';
+                return list.map((d) => `${d.speaker ?? ''}：${d.line ?? ''}`).join(' / ');
+              } catch {
+                return '—';
+              }
+            },
+          },
+          {
+            title: '画面',
+            dataIndex: 'visual',
+            ellipsis: true,
+            render: (v: string | null) => v || '—',
+          },
+          {
+            title: '操作',
+            width: 70,
+            render: (_, row) => (
+              <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => setEditing(row)}>
                 编辑
               </Button>
             ),
           },
         ]}
       />
-      <Button size="small" icon={<PlusOutlined />} className="mt-3" onClick={onAdd}>
-        新增话
-      </Button>
+      <PageEditModal page={editing} onClose={() => setEditing(null)} />
     </div>
   );
 }
 
-/** 资产库 Tab:四类分类标签,默认选中「角色」 */
-function AssetsTab({
-  assets,
-  category,
-  onCategoryChange,
-  onEdit,
-  onAdd,
-}: {
+function PageEditModal({ page, onClose }: { page: PageVO | null; onClose: () => void }) {
+  const { message } = App.useApp();
+  const queryClient = useQueryClient();
+  const [form] = Form.useForm<{ narration: string; dialogueLines: string; visual: string }>();
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!page) return;
+    let lines = '';
+    try {
+      const list = JSON.parse(page.dialogue ?? '[]');
+      if (Array.isArray(list)) {
+        lines = list.map((d) => `${d.speaker ?? ''}：${d.line ?? ''}`).join('\n');
+      }
+    } catch {
+      lines = '';
+    }
+    form.setFieldsValue({
+      narration: page.narration ?? '',
+      dialogueLines: lines,
+      visual: page.visual ?? '',
+    });
+  }, [page, form]);
+
+  const onOk = async () => {
+    if (!page) return;
+    const values = await form.validateFields();
+    const dialogue = (values.dialogueLines ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const idx = line.indexOf('：') >= 0 ? line.indexOf('：') : line.indexOf(':');
+        return idx > 0
+          ? { speaker: line.substring(0, idx).trim(), line: line.substring(idx + 1).trim() }
+          : { speaker: '', line };
+      });
+    setSaving(true);
+    try {
+      await projectsApi.updatePage(page.id, {
+        narration: values.narration ?? '',
+        dialogue: JSON.stringify(dialogue),
+        visual: values.visual ?? '',
+      });
+      message.success('页脚本已保存');
+      queryClient.invalidateQueries({ queryKey: ['pages', page.chapterId] });
+      onClose();
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '保存失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={!!page}
+      title={`编辑第 ${page?.pageNo ?? ''} 页脚本`}
+      okText="保存"
+      cancelText="取消"
+      confirmLoading={saving}
+      onCancel={onClose}
+      onOk={onOk}
+      width={640}
+      destroyOnHidden
+    >
+      <Form form={form} layout="vertical">
+        <Form.Item name="narration" label="旁白(矩形叙述框)">
+          <Input.TextArea rows={2} />
+        </Form.Item>
+        <Form.Item name="dialogueLines" label="对白(每行一条,格式: 角色名：台词)">
+          <Input.TextArea rows={4} placeholder={'林夏：你回来了'} />
+        </Form.Item>
+        <Form.Item name="visual" label="画面详述(分镜构图+角色衣着特征)">
+          <Input.TextArea rows={4} />
+        </Form.Item>
+      </Form>
+    </Modal>
+  );
+}
+
+/** 资产库 Tab:四类分类标签,默认选中「角色」;角色支持生成设定表;支持 AI 重新提取 */
+function AssetsTab({ projectId, assets, category, onCategoryChange, onEdit, onAdd }: {
+  projectId: number;
   assets: AssetVO[];
   category: number;
   onCategoryChange: (v: number) => void;
   onEdit: (asset: AssetVO) => void;
   onAdd: () => void;
 }) {
+  const { message } = App.useApp();
+  const queryClient = useQueryClient();
   const countOf = (type: number) => assets.filter((a) => a.assetType === type).length;
   const list = assets.filter((a) => a.assetType === category);
+
+  const genSheet = async (asset: AssetVO) => {
+    try {
+      const task = await projectsApi.generateSheet(asset.id);
+      message.success(`设定表任务 #${task.id} 已创建`);
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['assets', projectId] });
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '操作失败');
+    }
+  };
+
+  const rebuild = async () => {
+    try {
+      await projectsApi.rebuildAssets(projectId);
+      message.success('资产提取任务已创建');
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '操作失败');
+    }
+  };
 
   return (
     <div>
@@ -386,9 +597,16 @@ function AssetsTab({
             label: `${ASSET_TYPE_NAMES[type]}(${countOf(type)})`,
           }))}
         />
-        <Button size="small" icon={<PlusOutlined />} onClick={onAdd}>
-          新增{ASSET_TYPE_NAMES[category]}
-        </Button>
+        <Space>
+          <Tooltip title="AI 从故事原文重新提取四类资产(同名跳过)">
+            <Button size="small" icon={<ReloadOutlined />} onClick={rebuild}>
+              AI 重新提取
+            </Button>
+          </Tooltip>
+          <Button size="small" icon={<PlusOutlined />} onClick={onAdd}>
+            新增{ASSET_TYPE_NAMES[category]}
+          </Button>
+        </Space>
       </div>
 
       {list.length === 0 ? (
@@ -398,27 +616,34 @@ function AssetsTab({
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
           {list.map((asset) => (
-            <button
-              key={asset.id}
-              className="text-left p-3 rounded-xl border border-gray-200 hover:border-indigo-400 hover:shadow-sm transition bg-white"
-              onClick={() => onEdit(asset)}
-            >
+            <div key={asset.id} className="p-3 rounded-xl border border-gray-200 bg-white hover:border-indigo-400 hover:shadow-sm transition">
               <div className="flex items-center gap-2">
                 <Typography.Text strong ellipsis className="flex-1">
                   {asset.name}
                 </Typography.Text>
-                {asset.sheetImageUrl ? (
-                  <Tag color="green" bordered={false} style={{ marginRight: 0 }}>
-                    已有设定表
-                  </Tag>
-                ) : null}
+                {asset.assetType === 1 && (
+                  asset.genStatus === 1 ? (
+                    <Tag color="processing" bordered={false} style={{ marginRight: 0 }}>生成中</Tag>
+                  ) : asset.sheetImageUrl ? (
+                    <Tag color="green" bordered={false} style={{ marginRight: 0 }}>已有设定表</Tag>
+                  ) : (
+                    <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => genSheet(asset)}>
+                      生成设定表
+                    </Button>
+                  )
+                )}
               </div>
               {asset.description && (
                 <Typography.Paragraph type="secondary" className="mt-1 mb-0 text-xs" ellipsis={{ rows: 2, tooltip: asset.description }}>
                   {asset.description}
                 </Typography.Paragraph>
               )}
-            </button>
+              <div className="mt-2 text-right">
+                <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => onEdit(asset)}>
+                  编辑
+                </Button>
+              </div>
+            </div>
           ))}
         </div>
       )}

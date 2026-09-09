@@ -5,6 +5,7 @@ import com.aimanga.v2.dto.AssetVO;
 import com.aimanga.v2.dto.SaveAssetRequest;
 import com.aimanga.v2.model.Asset;
 import com.aimanga.v2.service.AssetService;
+import com.aimanga.v2.service.TaskService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -24,6 +25,7 @@ import java.util.List;
 public class AssetController {
 
     private final AssetService assetService;
+    private final TaskService taskService;
 
     @GetMapping("/projects/{projectId}/assets")
     public Result<List<AssetVO>> listByProject(@PathVariable Long projectId) {
@@ -44,5 +46,14 @@ public class AssetController {
     public Result<Void> delete(@PathVariable Long id) {
         assetService.delete(id);
         return Result.ok();
+    }
+
+    /** 生成/重新生成该角色的六姿势设定表(创建 SHEET 任务) */
+    @PostMapping("/assets/{id}/generate-sheet")
+    public Result<com.aimanga.v2.dto.TaskVO> generateSheet(@PathVariable Long id) {
+        Asset asset = assetService.requireAccessible(id);
+        var payload = com.fasterxml.jackson.databind.json.JsonMapper.builder().build().createObjectNode().put("assetId", id);
+        return Result.ok(taskService.create(
+                new com.aimanga.v2.dto.CreateTaskRequest(asset.getProjectId(), null, "SHEET", payload)));
     }
 }

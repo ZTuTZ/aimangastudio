@@ -42,6 +42,7 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
     private final TaskQueue taskQueue;
     private final TaskEventPublisher publisher;
     private final ObjectMapper objectMapper;
+    private final com.aimanga.v2.repository.ProjectMapper projectMapper;
 
     public TaskVO create(CreateTaskRequest request) {
         String type = request.taskType() == null ? "" : request.taskType().trim().toUpperCase();
@@ -183,6 +184,36 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
 
     public TaskVO toVO(TaskEntity task) {
         return toVO(task, null);
+    }
+
+    /**
+     * 系统内部入队(流水线链式调用,worker 线程无 Shiro 上下文):
+     * userId 取作品归属,不做用户归属校验。
+     */
+    public TaskEntity createSystemTask(Long projectId, Long chapterId, String type, String payloadJson) {
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) {
+            throw new BusinessException(404, "作品不存在: " + projectId);
+        }
+        TaskEntity task = new TaskEntity();
+        task.setUserId(project.getUserId());
+        task.setProjectId(projectId);
+        task.setChapterId(chapterId);
+        task.setTaskType(type);
+        task.setStatus(TaskStatus.PENDING);
+        task.setPriority(0);
+        task.setProgress(0);
+        task.setTotalCount(0);
+        task.setSuccessCount(0);
+        task.setFailCount(0);
+        task.setCurrentNo(0);
+        task.setPayload(payloadJson == null || payloadJson.isBlank() ? "{}" : payloadJson);
+        task.setError("");
+        task.setCreateTime(LocalDateTime.now());
+        save(task);
+        taskQueue.enqueue(task.getId());
+        publisher.publishCreated(task);
+        return task;
     }
 
     private Long extractPageId(com.fasterxml.jackson.databind.JsonNode payload) {

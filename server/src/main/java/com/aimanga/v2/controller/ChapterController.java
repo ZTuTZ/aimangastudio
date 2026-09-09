@@ -6,6 +6,7 @@ import com.aimanga.v2.dto.CreateChapterRequest;
 import com.aimanga.v2.dto.UpdateChapterRequest;
 import com.aimanga.v2.model.Chapter;
 import com.aimanga.v2.service.ChapterService;
+import com.aimanga.v2.service.TaskService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -23,6 +24,7 @@ import java.util.List;
 public class ChapterController {
 
     private final ChapterService chapterService;
+    private final TaskService taskService;
 
     @GetMapping("/projects/{projectId}/chapters")
     public Result<List<ChapterVO>> listByProject(@PathVariable Long projectId) {
@@ -37,5 +39,13 @@ public class ChapterController {
     @PutMapping("/chapters/{id}")
     public Result<ChapterVO> update(@PathVariable Long id, @RequestBody UpdateChapterRequest request) {
         return Result.ok(chapterService.toVO(chapterService.update(id, request)));
+    }
+
+    /** 重新生成本话脚本(创建 SCRIPT 任务) */
+    @PostMapping("/chapters/{id}/regenerate-script")
+    public Result<com.aimanga.v2.dto.TaskVO> regenerateScript(@PathVariable Long id) {
+        Chapter chapter = chapterService.requireAccessible(id);
+        return Result.ok(taskService.create(
+                new com.aimanga.v2.dto.CreateTaskRequest(chapter.getProjectId(), chapter.getId(), "SCRIPT", null)));
     }
 }

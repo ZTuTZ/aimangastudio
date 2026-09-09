@@ -5,6 +5,7 @@ import com.aimanga.v2.dto.CreateProjectRequest;
 import com.aimanga.v2.dto.PageResult;
 import com.aimanga.v2.dto.ProjectVO;
 import com.aimanga.v2.dto.UpdateProjectRequest;
+import com.aimanga.v2.event.ProjectCreatedEvent;
 import com.aimanga.v2.model.Chapter;
 import com.aimanga.v2.model.PageEntity;
 import com.aimanga.v2.model.Project;
@@ -26,6 +27,7 @@ public class ProjectService extends ServiceImpl<ProjectMapper, Project> {
 
     private final ChapterMapper chapterMapper;
     private final PageMapper pageMapper;
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     /** 当前用户的作品分页列表(ADMIN 也只看自己的,全局监控在 /admin/tasks) */
     public PageResult<ProjectVO> listPaged(int page, int size, String keyword, Integer status) {
@@ -59,6 +61,8 @@ public class ProjectService extends ServiceImpl<ProjectMapper, Project> {
         project.setSeriesStatus(Project.SERIES_COMPLETED);
         project.setCreateTime(LocalDateTime.now());
         save(project);
+        // 发布创建事件 → 任务系统按 feature_auto_split 自动入队拆话
+        eventPublisher.publishEvent(new ProjectCreatedEvent(project));
         // Phase 5:此处按 feature_auto_split 开关入队 SPLIT 拆话任务
         return project;
     }

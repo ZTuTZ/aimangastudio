@@ -3,8 +3,10 @@ package com.aimanga.v2.controller;
 import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.common.Result;
 import com.aimanga.v2.dto.CreateProjectRequest;
+import com.aimanga.v2.dto.CreateTaskRequest;
 import com.aimanga.v2.dto.PageResult;
 import com.aimanga.v2.dto.ProjectVO;
+import com.aimanga.v2.dto.TaskVO;
 import com.aimanga.v2.dto.UpdateProjectRequest;
 import com.aimanga.v2.model.Project;
 import com.aimanga.v2.service.ImportService;
@@ -31,6 +33,7 @@ public class ProjectController {
 
     private final ProjectService projectService;
     private final ImportService importService;
+    private final com.aimanga.v2.service.TaskService taskService;
 
     @GetMapping
     public Result<PageResult<ProjectVO>> list(
@@ -71,6 +74,20 @@ public class ProjectController {
     @GetMapping("/{id}")
     public Result<ProjectVO> get(@PathVariable Long id) {
         return Result.ok(projectService.toVO(projectService.requireAccessible(id)));
+    }
+
+    /** 手动触发拆话(处理器会拒绝已存在生成内容的作品) */
+    @PostMapping("/{id}/split")
+    public Result<TaskVO> split(@PathVariable Long id) {
+        projectService.requireAccessible(id);
+        return Result.ok(taskService.create(new CreateTaskRequest(id, null, "SPLIT", null)));
+    }
+
+    /** 手动重新提取资产 */
+    @PostMapping("/{id}/rebuild-assets")
+    public Result<TaskVO> rebuildAssets(@PathVariable Long id) {
+        projectService.requireAccessible(id);
+        return Result.ok(taskService.create(new CreateTaskRequest(id, null, "ASSET", null)));
     }
 
     @PutMapping("/{id}")

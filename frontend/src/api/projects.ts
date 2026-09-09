@@ -1,4 +1,5 @@
 import { http, unwrap } from './http';
+import type { TaskVO } from './tasks';
 
 export type ColorMode = 'partial' | 'monochrome' | 'color';
 export type AspectRatio = '3:4' | '2:3' | '1:1' | '16:9';
@@ -126,6 +127,10 @@ export const projectsApi = {
     }>,
   ) => unwrap<ProjectVO>(http.put(`/projects/${id}`, data)),
   remove: (id: number) => unwrap<void>(http.delete(`/projects/${id}`)),
+  split: (id: number) => unwrap<TaskVO>(http.post(`/projects/${id}/split`)),
+  rebuildAssets: (id: number) => unwrap<TaskVO>(http.post(`/projects/${id}/rebuild-assets`)),
+  regenerateScript: (chapterId: number) => unwrap<TaskVO>(http.post(`/chapters/${chapterId}/regenerate-script`)),
+  generateSheet: (assetId: number) => unwrap<TaskVO>(http.post(`/assets/${assetId}/generate-sheet`)),
   chapters: (projectId: number) => unwrap<ChapterVO[]>(http.get(`/projects/${projectId}/chapters`)),
   createChapter: (projectId: number, data: { title?: string; scriptText?: string }) =>
     unwrap<ChapterVO>(http.post(`/projects/${projectId}/chapters`, data)),

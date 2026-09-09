@@ -9,18 +9,21 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_group`, `rema
 ('ai_text_model', 'deepseek-v4-flash', 'ai_text', '文本模型'),
 ('ai_text_timeout', '120000', 'ai_text', '超时毫秒'),
 ('ai_text_concurrency', '15', 'ai_text', '并发上限(Redis 信号量)'),
+('ai_text_protocol', 'gemini', 'ai_text', '协议:gemini=generateContent / openai=chat.completions'),
 -- AI 生图通道
 ('ai_image_api_url', 'https://www.geeknow.top', 'ai_image', '生图 AI 接口地址'),
 ('ai_image_api_key', '', 'ai_image', '生图 AI API Key(脱敏展示)'),
 ('ai_image_model', 'gemini-2.5-flash-image-preview', 'ai_image', '生图模型'),
 ('ai_image_timeout', '600000', 'ai_image', '超时毫秒'),
 ('ai_image_concurrency', '10', 'ai_image', '并发上限(Redis 信号量)'),
+('ai_image_protocol', 'gemini', 'ai_image', '协议:gemini=generateContent(默认) / openai=images.generations'),
 -- AI 编辑/合并通道
 ('ai_merge_api_url', 'https://www.geeknow.top', 'ai_merge', '编辑 AI 接口地址'),
 ('ai_merge_api_key', '', 'ai_merge', '编辑 AI API Key(脱敏展示)'),
 ('ai_merge_model', 'gemini-2.5-flash-image-preview', 'ai_merge', '编辑模型'),
 ('ai_merge_timeout', '600000', 'ai_merge', '超时毫秒'),
 ('ai_merge_concurrency', '10', 'ai_merge', '并发上限(Redis 信号量)'),
+('ai_merge_protocol', 'gemini', 'ai_merge', '协议:gemini=generateContent / openai=chat.completions'),
 -- 提示词(留空则使用代码内置默认模板)
 ('prompt_split', '', 'prompt', '拆话提示词({text})'),
 ('prompt_script', '', 'prompt', '六段式脚本提示词({text}/{aspect}/{page_count}/{style})'),

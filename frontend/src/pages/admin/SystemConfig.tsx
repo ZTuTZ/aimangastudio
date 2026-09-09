@@ -1,4 +1,4 @@
-import { App, Button, Card, Input, Space, Tabs, Typography } from 'antd';
+import { App, Button, Card, Input, Select, Space, Tabs, Typography } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { configApi, type ConfigMap } from '@/api/config';
@@ -6,8 +6,9 @@ import { configApi, type ConfigMap } from '@/api/config';
 interface FieldDef {
   key: string;
   label: string;
-  type?: 'input' | 'password' | 'number';
+  type?: 'input' | 'password' | 'number' | 'select';
   placeholder?: string;
+  options?: { value: string; label: string }[];
 }
 
 interface GroupDef {
@@ -24,6 +25,10 @@ const GROUPS: GroupDef[] = [
       { key: 'ai_text_api_url', label: '接口地址' },
       { key: 'ai_text_api_key', label: 'API Key', type: 'password', placeholder: '已配置(留空保持不变)' },
       { key: 'ai_text_model', label: '模型' },
+      { key: 'ai_text_protocol', label: '协议', type: 'select', options: [
+        { value: 'gemini', label: 'gemini(generateContent,GeekAI 网关)' },
+        { value: 'openai', label: 'openai(chat.completions,GLM/DeepSeek)' },
+      ] },
       { key: 'ai_text_timeout', label: '超时(毫秒)', type: 'number' },
       { key: 'ai_text_concurrency', label: '并发上限', type: 'number' },
     ],
@@ -35,6 +40,10 @@ const GROUPS: GroupDef[] = [
       { key: 'ai_image_api_url', label: '接口地址' },
       { key: 'ai_image_api_key', label: 'API Key', type: 'password', placeholder: '已配置(留空保持不变)' },
       { key: 'ai_image_model', label: '模型' },
+      { key: 'ai_image_protocol', label: '协议', type: 'select', options: [
+        { value: 'gemini', label: 'gemini(generateContent)' },
+        { value: 'openai', label: 'openai(images.generations)' },
+      ] },
       { key: 'ai_image_timeout', label: '超时(毫秒)', type: 'number' },
       { key: 'ai_image_concurrency', label: '并发上限', type: 'number' },
     ],
@@ -46,6 +55,10 @@ const GROUPS: GroupDef[] = [
       { key: 'ai_merge_api_url', label: '接口地址' },
       { key: 'ai_merge_api_key', label: 'API Key', type: 'password', placeholder: '已配置(留空保持不变)' },
       { key: 'ai_merge_model', label: '模型' },
+      { key: 'ai_merge_protocol', label: '协议', type: 'select', options: [
+        { value: 'gemini', label: 'gemini(generateContent)' },
+        { value: 'openai', label: 'openai(chat.completions)' },
+      ] },
       { key: 'ai_merge_timeout', label: '超时(毫秒)', type: 'number' },
       { key: 'ai_merge_concurrency', label: '并发上限', type: 'number' },
     ],
@@ -131,6 +144,13 @@ export function SystemConfig() {
               placeholder={secretMasked(field.key) ? '已配置,留空保持不变' : '未配置'}
               onChange={(e) => setValues((v) => ({ ...v, [field.key]: e.target.value }))}
               autoComplete="new-password"
+            />
+          ) : field.type === 'select' ? (
+            <Select
+              value={values[field.key] || undefined}
+              placeholder="未配置(默认 gemini)"
+              options={field.options}
+              onChange={(v) => setValues((x) => ({ ...x, [field.key]: v }))}
             />
           ) : (
             <Input

@@ -22,7 +22,7 @@ class AiClientTest {
     void setUp() throws IOException {
         server = new MockWebServer();
         server.start();
-        cfg = new ChatConfig(server.url("/").toString(), "sk-test", "gemini-2.5-flash", 5000);
+        cfg = new ChatConfig(server.url("/").toString(), "sk-test", "gemini-2.5-flash", 5000, "gemini");
     }
 
     @AfterEach
@@ -55,6 +55,19 @@ class AiClientTest {
     void chatText_parsesRawNonJsonBody() {
         server.enqueue(new MockResponse().setBody("直接返回的文本"));
         assertThat(client.chatText(cfg, "ping", List.of())).isEqualTo("直接返回的文本");
+    }
+
+    @Test
+    void chatText_openaiProtocol_hitsChatCompletions() throws Exception {
+        ChatConfig openai = new ChatConfig(server.url("/").toString(), "sk-glm", "glm-5.3-flash", 5000, "openai");
+        server.enqueue(new MockResponse().setBody("""
+                {"choices":[{"message":{"role":"assistant","content":"你好,我是 GLM"}}]}
+                """));
+        String text = client.chatText(openai, "ping", List.of());
+        assertThat(text).isEqualTo("你好,我是 GLM");
+        var recorded = server.takeRequest();
+        assertThat(recorded.getPath()).isEqualTo("/chat/completions");
+        assertThat(recorded.getBody().readUtf8()).contains("glm-5.3-flash").contains("ping");
     }
 
     @Test
