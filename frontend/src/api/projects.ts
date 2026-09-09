@@ -70,8 +70,20 @@ export interface ProjectSettings {
   stylePresetId?: number | null;
 }
 
+export interface PageResult<T> {
+  records: T[];
+  total: number;
+}
+
+export interface ProjectListParams {
+  page: number;
+  size: number;
+  keyword?: string;
+  status?: number;
+}
+
 export const projectsApi = {
-  list: () => unwrap<ProjectVO[]>(http.get('/projects')),
+  list: (params: ProjectListParams) => unwrap<PageResult<ProjectVO>>(http.get('/projects', { params })),
   get: (id: number) => unwrap<ProjectVO>(http.get(`/projects/${id}`)),
   create: (data: { title: string; sourceText: string } & ProjectSettings) =>
     unwrap<ProjectVO>(http.post('/projects', data)),

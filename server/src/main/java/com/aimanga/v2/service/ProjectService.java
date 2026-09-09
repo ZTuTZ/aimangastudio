@@ -2,6 +2,7 @@ package com.aimanga.v2.service;
 
 import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.dto.CreateProjectRequest;
+import com.aimanga.v2.dto.PageResult;
 import com.aimanga.v2.dto.ProjectVO;
 import com.aimanga.v2.dto.UpdateProjectRequest;
 import com.aimanga.v2.model.Chapter;
@@ -26,12 +27,20 @@ public class ProjectService extends ServiceImpl<ProjectMapper, Project> {
     private final ChapterMapper chapterMapper;
     private final PageMapper pageMapper;
 
-    /** 当前用户的作品列表(ADMIN 也只看自己的,全局监控在 /admin/tasks) */
-    public List<ProjectVO> listMine() {
-        return list(new LambdaQueryWrapper<Project>()
-                        .eq(Project::getUserId, CurrentUser.id())
-                        .orderByDesc(Project::getId))
-                .stream().map(this::toVO).toList();
+    /** 当前用户的作品分页列表(ADMIN 也只看自己的,全局监控在 /admin/tasks) */
+    public PageResult<ProjectVO> listPaged(int page, int size, String keyword, Integer status) {
+        Long userId = CurrentUser.id();
+        String kw = (keyword == null || keyword.isBlank()) ? null : escapeLike(keyword.trim());
+        long total = baseMapper.countByUserFiltered(userId, status, kw);
+        List<ProjectVO> records = total == 0
+                ? List.of()
+                : baseMapper.selectPageByUserFiltered(userId, status, kw, (long) (page - 1) * size, size);
+        return new PageResult<>(records, total);
+    }
+
+    /** LIKE 通配符转义,避免用户输入 %/_ 引发全表扫描语义 */
+    private static String escapeLike(String keyword) {
+        return keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     public Project create(String title, String sourceText, String aspectRatio, String colorMode, Long stylePresetId) {
@@ -66,10 +75,20 @@ public class ProjectService extends ServiceImpl<ProjectMapper, Project> {
                 .eq(Chapter::getProjectId, project.getId()));
         Long pageCount = pageMapper.selectCount(new LambdaQueryWrapper<PageEntity>()
                 .eq(PageEntity::getProjectId, project.getId()));
-        return new ProjectVO(project.getId(), project.getTitle(), project.getStatus(),
-                project.getAspectRatio(), project.getColorMode(), project.getStylePresetId(),
-                project.getTagline(), project.getSourceText(), project.getCreateTime(), project.getUpdateTime(),
-                chapterCount == null ? 0 : chapterCount, pageCount == null ? 0 : pageCount);
+        ProjectVO vo = new ProjectVO();
+        vo.setId(project.getId());
+        vo.setTitle(project.getTitle());
+        vo.setStatus(project.getStatus());
+        vo.setAspectRatio(project.getAspectRatio());
+        vo.setColorMode(project.getColorMode());
+        vo.setStylePresetId(project.getStylePresetId());
+        vo.setTagline(project.getTagline());
+        vo.setSourceText(project.getSourceText());
+        vo.setCreateTime(project.getCreateTime());
+        vo.setUpdateTime(project.getUpdateTime());
+        vo.setChapterCount(chapterCount == null ? 0 : chapterCount);
+        vo.setPageCount(pageCount == null ? 0 : pageCount);
+        return vo;
     }
 
     public Project update(Long id, UpdateProjectRequest request) {

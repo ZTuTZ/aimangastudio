@@ -1,25 +1,50 @@
-import { App, Card, Empty, Popconfirm, Tag, Typography } from 'antd';
-import { PlusOutlined, UploadOutlined } from '@ant-design/icons';
+import { App, Button, Empty, Input, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
+import { SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { projectsApi, PROJECT_STATUS, type ProjectVO } from '@/api/projects';
 import { UploadStoriesModal } from '@/components/UploadStoriesModal';
+import type { ColumnsType } from 'antd/es/table';
 
-const GRADIENTS = [
-  'linear-gradient(135deg,#6366f1,#a855f7)',
-  'linear-gradient(135deg,#0ea5e9,#6366f1)',
-  'linear-gradient(135deg,#f59e0b,#ef4444)',
-  'linear-gradient(135deg,#10b981,#0ea5e9)',
-  'linear-gradient(135deg,#ec4899,#f59e0b)',
-];
+/** 搜索条件(点击查询/回车才生效,避免每次击键都打接口) */
+interface AppliedFilter {
+  keyword?: string;
+  status?: number;
+}
 
 export function ProjectList() {
   const navigate = useNavigate();
   const { message } = App.useApp();
   const queryClient = useQueryClient();
   const [uploadOpen, setUploadOpen] = useState(false);
-  const { data, isLoading } = useQuery({ queryKey: ['projects'], queryFn: projectsApi.list });
+
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(12);
+  const [keywordInput, setKeywordInput] = useState('');
+  const [statusInput, setStatusInput] = useState<number | undefined>();
+  const [applied, setApplied] = useState<AppliedFilter>({});
+
+  const { data, isLoading, isFetching } = useQuery({
+    queryKey: ['projects', page, pageSize, applied],
+    queryFn: () => projectsApi.list({ page, size: pageSize, ...applied }),
+    placeholderData: (prev) => prev,
+  });
+
+  const applySearch = () => {
+    setPage(1);
+    setApplied({
+      keyword: keywordInput.trim() || undefined,
+      status: statusInput,
+    });
+  };
+
+  const resetSearch = () => {
+    setKeywordInput('');
+    setStatusInput(undefined);
+    setPage(1);
+    setApplied({});
+  };
 
   const onDelete = async (project: ProjectVO) => {
     try {
@@ -31,9 +56,74 @@ export function ProjectList() {
     }
   };
 
+  const columns: ColumnsType<ProjectVO> = [
+    {
+      title: '作品',
+      dataIndex: 'title',
+      render: (_, row) => (
+        <div className="min-w-0">
+          <Typography.Text strong ellipsis className="block">
+            {row.title}
+          </Typography.Text>
+          <Typography.Text type="secondary" ellipsis className="block text-xs">
+            {row.tagline || '暂无简介'}
+          </Typography.Text>
+        </div>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 100,
+      render: (s: number) => {
+        const meta = PROJECT_STATUS[s] ?? { label: '未知', color: 'default' };
+        return <Tag color={meta.color}>{meta.label}</Tag>;
+      },
+    },
+    { title: '画幅', dataIndex: 'aspectRatio', width: 80 },
+    {
+      title: '色彩模式',
+      dataIndex: 'colorMode',
+      width: 100,
+      render: (m: string) => (m === 'partial' ? '局部上色' : m === 'monochrome' ? '黑白' : m === 'color' ? '全彩' : m),
+    },
+    {
+      title: '话 / 页',
+      key: 'scale',
+      width: 90,
+      render: (_, row) => `${row.chapterCount} 话 / ${row.pageCount} 页`,
+    },
+    { title: '创建时间', dataIndex: 'createTime', width: 170 },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 140,
+      render: (_, row) => (
+        <Space>
+          <Button size="small" type="primary" ghost onClick={(e) => { e.stopPropagation(); navigate(`/projects/${row.id}`); }}>
+            打开
+          </Button>
+          <Popconfirm
+            title={`删除「${row.title}」?`}
+            description="话/页/资产将一并删除,不可恢复"
+            okText="删除"
+            okButtonProps={{ danger: true }}
+            cancelText="取消"
+            onConfirm={(e) => { e?.stopPropagation(); onDelete(row); }}
+            onCancel={(e) => e?.stopPropagation()}
+          >
+            <Button size="small" danger onClick={(e) => e.stopPropagation()}>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <Typography.Title level={4} style={{ margin: 0 }}>
             作品库
@@ -49,77 +139,51 @@ export function ProjectList() {
         </button>
       </div>
 
-      {data && data.length === 0 && !isLoading && (
-        <Card>
-          <Empty description="还没有作品,点击右上角「上传故事」开始创作">
-            <button
-              onClick={() => setUploadOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-semibold"
-              style={{ background: '#6366f1' }}
-            >
-              <PlusOutlined /> 上传第一部作品
-            </button>
-          </Empty>
-        </Card>
-      )}
+      <div className="bg-white rounded-xl border border-[#eef0f4] p-4">
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          <Input
+            allowClear
+            placeholder="按作品名称搜索"
+            prefix={<SearchOutlined />}
+            style={{ width: 240 }}
+            value={keywordInput}
+            onChange={(e) => setKeywordInput(e.target.value)}
+            onPressEnter={applySearch}
+          />
+          <Select
+            allowClear
+            placeholder="状态"
+            style={{ width: 140 }}
+            value={statusInput}
+            onChange={(v) => setStatusInput(v)}
+            options={Object.entries(PROJECT_STATUS).map(([v, m]) => ({ value: Number(v), label: m.label }))}
+          />
+          <Button type="primary" onClick={applySearch}>
+            查询
+          </Button>
+          <Button onClick={resetSearch}>重置</Button>
+        </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {(data ?? []).map((project, idx) => {
-          const status = PROJECT_STATUS[project.status] ?? { label: '未知', color: 'default' };
-          return (
-            <Card
-              key={project.id}
-              hoverable
-              className="overflow-hidden"
-              styles={{ body: { padding: 0 } }}
-              onClick={() => navigate(`/projects/${project.id}`)}
-            >
-              <div
-                className="h-32 flex items-center justify-center text-white text-4xl font-bold"
-                style={{ background: GRADIENTS[idx % GRADIENTS.length] }}
-              >
-                {project.title.slice(0, 1)}
-              </div>
-              <div className="p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <Typography.Text strong ellipsis className="flex-1">
-                    {project.title}
-                  </Typography.Text>
-                  <Tag color={status.color}>{status.label}</Tag>
-                </div>
-                <Typography.Paragraph type="secondary" className="mt-1 mb-2 text-xs" ellipsis={{ rows: 1 }}>
-                  {project.tagline || '暂无简介'}
-                </Typography.Paragraph>
-                <div className="flex items-center justify-between text-xs text-gray-400">
-                  <span>
-                    {project.aspectRatio} · {project.colorMode === 'partial' ? '局部上色' : project.colorMode === 'monochrome' ? '黑白' : '全彩'} ·{' '}
-                    {project.chapterCount} 话 {project.pageCount} 页
-                  </span>
-                  <Popconfirm
-                    title={`删除「${project.title}」?`}
-                    description="话/页/资产将一并删除,不可恢复"
-                    okText="删除"
-                    okButtonProps={{ danger: true }}
-                    cancelText="取消"
-                    onPopupClick={(e) => e.stopPropagation()}
-                    onConfirm={(e) => {
-                      e?.stopPropagation();
-                      onDelete(project);
-                    }}
-                    onCancel={(e) => e?.stopPropagation()}
-                  >
-                    <button
-                      className="text-xs text-gray-400 hover:text-red-500"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      删除
-                    </button>
-                  </Popconfirm>
-                </div>
-              </div>
-            </Card>
-          );
-        })}
+        <Table<ProjectVO>
+          rowKey="id"
+          columns={columns}
+          dataSource={data?.records ?? []}
+          loading={isLoading || isFetching}
+          locale={{ emptyText: <Empty description="暂无作品,点击右上角「上传故事」开始创作" /> }}
+          onRow={(row) => ({ onClick: () => navigate(`/projects/${row.id}`), style: { cursor: 'pointer' } })}
+          pagination={{
+            current: page,
+            pageSize,
+            total: data?.total ?? 0,
+            showSizeChanger: true,
+            pageSizeOptions: [12, 24, 48],
+            showTotal: (total) => `共 ${total} 部作品`,
+            onChange: (p, s) => {
+              setPage(p);
+              setPageSize(s);
+            },
+          }}
+        />
       </div>
 
       <UploadStoriesModal open={uploadOpen} onClose={() => setUploadOpen(false)} />

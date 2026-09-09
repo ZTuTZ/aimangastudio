@@ -3,6 +3,7 @@ package com.aimanga.v2.controller;
 import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.common.Result;
 import com.aimanga.v2.dto.CreateProjectRequest;
+import com.aimanga.v2.dto.PageResult;
 import com.aimanga.v2.dto.ProjectVO;
 import com.aimanga.v2.dto.UpdateProjectRequest;
 import com.aimanga.v2.model.Project;
@@ -32,8 +33,18 @@ public class ProjectController {
     private final ImportService importService;
 
     @GetMapping
-    public Result<List<ProjectVO>> list() {
-        return Result.ok(projectService.listMine().stream().map(ProjectVO::brief).toList());
+    public Result<PageResult<ProjectVO>> list(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "12") int size,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Integer status) {
+        if (page < 1) {
+            page = 1;
+        }
+        if (size < 1 || size > 50) {
+            size = 12;
+        }
+        return Result.ok(projectService.listPaged(page, size, keyword, status));
     }
 
     @PostMapping
