@@ -1,9 +1,11 @@
-import { App, Button, Empty, Input, Popconfirm, Progress, Select, Space, Table, Tag, Tooltip, Typography } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { App, Button, Empty, Form, Input, InputNumber, Modal, Popconfirm, Progress, Select, Space, Table, Tag, Tooltip, Typography } from 'antd';
+import { CaretRightOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { projectsApi } from '@/api/projects';
 import { tasksApi, TASK_STATUS, TASK_TYPE_LABELS, type TaskVO } from '@/api/tasks';
+import { useAuthStore } from '@/stores/authStore';
 import { useSseTasks } from '@/hooks/useSseTasks';
 import type { ColumnsType } from 'antd/es/table';
 
@@ -33,6 +35,8 @@ export function TaskCenter() {
   const [typeInput, setTypeInput] = useState<string | undefined>();
   const [keywordInput, setKeywordInput] = useState('');
   const [applied, setApplied] = useState<AppliedFilter>({});
+  const [testModalOpen, setTestModalOpen] = useState(false);
+  const isAdmin = useAuthStore((s) => s.user?.role === 'ADMIN');
 
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['tasks', page, pageSize, applied],
@@ -204,6 +208,11 @@ export function TaskCenter() {
           </Typography.Text>
         </div>
         <Space>
+          {isAdmin && (
+            <Button icon={<CaretRightOutlined />} onClick={() => setTestModalOpen(true)}>
+              创建测试任务
+            </Button>
+          )}
           {data && data.records.some((t) => [2, 3, 4, 5].includes(t.status)) && (
             <Button onClick={onBatchDeleteStopped}>清理本页结束任务</Button>
           )}
@@ -263,6 +272,95 @@ export function TaskCenter() {
           }}
         />
       </div>
+      <UploadStoriesTestModal
+        open={testModalOpen}
+        onClose={() => setTestModalOpen(false)}
+      />
     </div>
+  );
+}
+
+/** 创建 MOCK 测试任务(仅管理员):验证状态机/并发/停止/重试 */
+function UploadStoriesTestModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { message } = App.useApp();
+  const queryClient = useQueryClient();
+  const [form] = Form.useForm<{ projectId: number; steps: number; sleepMs: number; failAt?: number[] }>();
+  const [submitting, setSubmitting] = useState(false);
+
+  const { data: projects } = useQuery({
+    queryKey: ['projects', 'for-test'],
+    queryFn: () => projectsApi.list({ page: 1, size: 50 }),
+    enabled: open,
+  });
+
+  const onOk = async () => {
+    const values = await form.validateFields();
+    setSubmitting(true);
+    try {
+      const payload: Record<string, unknown> = { steps: values.steps, sleepMs: values.sleepMs };
+      if (values.failAt && values.failAt.length > 0) {
+        payload.failAt = values.failAt;
+      }
+      const created = await tasksApi.create({
+        projectId: values.projectId,
+        taskType: 'MOCK',
+        payload,
+      });
+      message.success(`测试任务 #${created.id} 已创建并入队`);
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      form.resetFields();
+      onClose();
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '创建失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      title="创建测试任务(MOCK)"
+      okText="创建并入队"
+      cancelText="取消"
+      confirmLoading={submitting}
+      onCancel={onClose}
+      onOk={onOk}
+      destroyOnHidden
+    >
+      <Typography.Paragraph type="secondary" className="mb-4">
+        测试任务会按设定的步数/节奏空转,用于验证任务系统的状态机、并发上限、停止与重试。
+      </Typography.Paragraph>
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{ steps: 8, sleepMs: 600 }}
+      >
+        <Form.Item name="projectId" label="关联作品" rules={[{ required: true, message: '请选择作品' }]}>
+          <Select
+            showSearch
+            optionFilterProp="label"
+            placeholder="选择作品"
+            options={(projects?.records ?? []).map((p) => ({ value: p.id, label: p.title }))}
+          />
+        </Form.Item>
+        <Space size="large">
+          <Form.Item name="steps" label="步数(1-50)" rules={[{ required: true }]}>
+            <InputNumber min={1} max={50} style={{ width: 120 }} />
+          </Form.Item>
+          <Form.Item name="sleepMs" label="每步耗时(ms)" rules={[{ required: true }]}>
+            <InputNumber min={50} max={10000} step={100} style={{ width: 140 }} />
+          </Form.Item>
+        </Space>
+        <Form.Item name="failAt" label="失败步骤(可选,用于模拟部分失败)">
+          <Select
+            mode="tags"
+            open={false}
+            placeholder="如: 2,4 表示第2/4步失败"
+            tokenSeparators={[',', ' ']}
+          />
+        </Form.Item>
+      </Form>
+    </Modal>
   );
 }
