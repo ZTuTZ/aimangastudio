@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS `user` (
 -- 作品(剧)
 CREATE TABLE IF NOT EXISTS `project` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `content_uid` CHAR(36) NOT NULL COMMENT '跨系统稳定作品ID',
   `user_id` BIGINT UNSIGNED NOT NULL,
   `title` VARCHAR(255) NOT NULL,
   `source_text` LONGTEXT COMMENT '故事原文',
@@ -25,10 +26,16 @@ CREATE TABLE IF NOT EXISTS `project` (
   `color_mode` VARCHAR(20) NOT NULL DEFAULT 'partial' COMMENT 'partial局部上色/monochrome黑白/color全彩',
   `style_preset_id` BIGINT UNSIGNED DEFAULT NULL,
   `status` TINYINT NOT NULL DEFAULT 0 COMMENT '0准备中1待出图2出图中3完成4部分失败',
-  `tagline` VARCHAR(64) DEFAULT '' COMMENT '简介文案',
+  `tagline` VARCHAR(64) DEFAULT '' COMMENT '短简介/一句话卖点',
+  `description` TEXT COMMENT '漫画正式简介',
+  `cover_url` VARCHAR(512) DEFAULT NULL COMMENT '漫画封面OSS URL',
+  `category` VARCHAR(64) NOT NULL DEFAULT '' COMMENT '漫画主分类',
+  `tags` JSON DEFAULT NULL COMMENT '漫画标签数组',
+  `series_status` TINYINT NOT NULL DEFAULT 2 COMMENT '1连载中 2已完结',
   `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `update_time` DATETIME DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_project_content_uid` (`content_uid`),
   KEY `idx_project_user` (`user_id`),
   KEY `idx_project_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='作品';

@@ -13,6 +13,8 @@ public class ProjectVO {
 
     private Long id;
 
+    private String contentUid;
+
     private String title;
 
     private Integer status;
@@ -24,6 +26,17 @@ public class ProjectVO {
     private Long stylePresetId;
 
     private String tagline;
+
+    private String description;
+
+    private String coverUrl;
+
+    private String category;
+
+    /** JSON 数组字符串,如 ["重生","系统"] */
+    private String tags;
+
+    private Integer seriesStatus;
 
     private String sourceText;
 

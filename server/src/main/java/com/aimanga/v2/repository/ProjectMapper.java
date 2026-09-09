@@ -34,8 +34,10 @@ public interface ProjectMapper extends BaseMapper<Project> {
      */
     @Select("""
             SELECT p.id, p.title, p.status,
+                   p.content_uid AS contentUid,
                    p.aspect_ratio AS aspectRatio, p.color_mode AS colorMode,
                    p.style_preset_id AS stylePresetId, p.tagline,
+                   p.cover_url AS coverUrl, p.category, p.tags, p.series_status AS seriesStatus,
                    p.create_time AS createTime, p.update_time AS updateTime,
                    (SELECT COUNT(*) FROM chapter c WHERE c.project_id = p.id) AS chapterCount,
                    (SELECT COUNT(*) FROM page g WHERE g.project_id = p.id) AS pageCount

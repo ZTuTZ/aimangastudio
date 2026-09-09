@@ -1,15 +1,18 @@
-import { App, Button, Card, Descriptions, Form, Input, Modal, Segmented, Select, Space, Table, Tabs, Tag, Typography } from 'antd';
-import { ArrowLeftOutlined, PlusOutlined } from '@ant-design/icons';
+import { App, AutoComplete, Button, Card, Descriptions, Form, Input, Modal, Segmented, Select, Space, Table, Tabs, Tag, Tooltip, Typography, Upload } from 'antd';
+import { ArrowLeftOutlined, EditOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ComingSoon } from '@/components/ComingSoon';
 import {
   ASSET_TYPE_NAMES,
+  CATEGORY_SUGGESTIONS,
   PROJECT_STATUS,
+  SERIES_STATUS,
   projectsApi,
   type AssetVO,
   type ChapterVO,
+  type ProjectVO,
 } from '@/api/projects';
 
 export function ProjectDetail() {
@@ -25,6 +28,7 @@ export function ProjectDetail() {
   const [chapterModal, setChapterModal] = useState<{ open: boolean; chapter?: ChapterVO }>({ open: false });
   const [assetModal, setAssetModal] = useState<{ open: boolean; asset?: AssetVO }>({ open: false });
   const [assetCategory, setAssetCategory] = useState<number>(1); // 默认展示「角色」
+  const [infoModalOpen, setInfoModalOpen] = useState(false);
 
   if (!project) {
     return <Card loading />;
@@ -32,10 +36,18 @@ export function ProjectDetail() {
 
   const chapterCount = chapters?.length ?? 0;
   const assetCount = assets?.length ?? 0;
+  const tagList: string[] = (() => {
+    try {
+      const parsed = JSON.parse(project.tags ?? '[]');
+      return Array.isArray(parsed) ? parsed.filter((t) => typeof t === 'string') : [];
+    } catch {
+      return [];
+    }
+  })();
 
   return (
     <div className="flex flex-col gap-4">
-      {/* 基本信息(保持原状) */}
+      {/* 基本信息(保持原状,仅扩充元数据展示 + 编辑入口) */}
       <Card styles={{ body: { padding: 20 } }}>
         <div className="flex items-center justify-between">
           <Space>
@@ -49,6 +61,9 @@ export function ProjectDetail() {
           </Space>
           <Space>
             <PresetSelect projectId={projectId} value={project.stylePresetId} presets={presets ?? []} />
+            <Button icon={<EditOutlined />} onClick={() => setInfoModalOpen(true)}>
+              编辑信息
+            </Button>
           </Space>
         </div>
         <Descriptions
@@ -60,6 +75,39 @@ export function ProjectDetail() {
             { key: 'aspect', label: '画幅', children: project.aspectRatio },
             { key: 'color', label: '色彩模式', children: <ColorModeTag mode={project.colorMode} /> },
             { key: 'counts', label: '规模', children: `${project.chapterCount} 话 / ${project.pageCount} 页` },
+            {
+              key: 'series',
+              label: '连载状态',
+              children: <SeriesStatusTag status={project.seriesStatus} />,
+            },
+            { key: 'category', label: '主分类', children: project.category || '—' },
+            {
+              key: 'tags',
+              label: '标签',
+              children:
+                tagList.length > 0 ? (
+                  <Space size={4} wrap>
+                    {tagList.map((t) => (
+                      <Tag key={t} bordered={false} style={{ marginRight: 0 }}>
+                        {t}
+                      </Tag>
+                    ))}
+                  </Space>
+                ) : (
+                  '—'
+                ),
+            },
+            {
+              key: 'uid',
+              label: '内容 ID',
+              children: (
+                <Tooltip title={project.contentUid}>
+                  <Typography.Text code copyable={{ text: project.contentUid }} style={{ fontSize: 12 }}>
+                    {project.contentUid}
+                  </Typography.Text>
+                </Tooltip>
+              ),
+            },
           ]}
         />
       </Card>
@@ -107,7 +155,155 @@ export function ProjectDetail() {
         defaultType={assetCategory}
         onClose={() => setAssetModal({ open: false })}
       />
+
+      <InfoEditModal
+        open={infoModalOpen}
+        project={project}
+        onClose={() => setInfoModalOpen(false)}
+      />
     </div>
+  );
+}
+
+/** 作品元数据编辑:短简介/正式简介/封面/主分类/标签/连载状态(content_uid 不可编辑) */
+function InfoEditModal({
+  open,
+  project,
+  onClose,
+}: {
+  open: boolean;
+  project: ProjectVO;
+  onClose: () => void;
+}) {
+  const { message } = App.useApp();
+  const queryClient = useQueryClient();
+  const [form] = Form.useForm<{
+    tagline: string;
+    description: string;
+    coverUrl: string;
+    category: string;
+    tagList: string[];
+    seriesStatus: number;
+  }>();
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  const tagList: string[] = (() => {
+    try {
+      const parsed = JSON.parse(project.tags ?? '[]');
+      return Array.isArray(parsed) ? parsed.filter((t) => typeof t === 'string') : [];
+    } catch {
+      return [];
+    }
+  })();
+
+  const onOk = async () => {
+    const values = await form.validateFields();
+    setSaving(true);
+    try {
+      await projectsApi.update(project.id, {
+        tagline: values.tagline ?? '',
+        description: values.description ?? '',
+        coverUrl: values.coverUrl ?? '',
+        category: values.category ?? '',
+        tags: JSON.stringify(values.tagList ?? []),
+        seriesStatus: values.seriesStatus,
+      });
+      message.success('作品信息已保存');
+      queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      onClose();
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '保存失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      title="编辑作品信息"
+      width={620}
+      okText="保存"
+      cancelText="取消"
+      confirmLoading={saving}
+      onCancel={onClose}
+      onOk={onOk}
+      destroyOnHidden
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{
+          tagline: project.tagline ?? '',
+          description: project.description ?? '',
+          coverUrl: project.coverUrl ?? '',
+          category: project.category ?? '',
+          tagList,
+          seriesStatus: project.seriesStatus ?? 2,
+        }}
+      >
+        <Form.Item name="tagline" label="短简介(卡片一句话卖点,建议 20-50 字)">
+          <Input placeholder="如:末日重临,他带着前世记忆抢占最后的生机" showCount maxLength={64} />
+        </Form.Item>
+        <Form.Item name="description" label="正式简介(详情页用,建议 80-300 字,避免剧透结局)">
+          <Input.TextArea rows={4} maxLength={2000} showCount />
+        </Form.Item>
+        <Form.Item name="coverUrl" label="封面(可上传到 OSS 自动填充,也可直接粘贴 URL)">
+          <Space.Compact style={{ width: '100%' }}>
+            <Form.Item name="coverUrl" noStyle>
+              <Input placeholder="https://…oss…/cover.png" />
+            </Form.Item>
+            <Upload
+              accept="image/*"
+              showUploadList={false}
+              beforeUpload={async (file) => {
+                setUploading(true);
+                try {
+                  const { url } = await projectsApi.uploadFile(file);
+                  form.setFieldValue('coverUrl', url);
+                  message.success('封面上传成功');
+                } catch (e) {
+                  message.error(e instanceof Error ? e.message : '上传失败');
+                } finally {
+                  setUploading(false);
+                }
+                return false;
+              }}
+            >
+              <Button icon={<UploadOutlined />} loading={uploading}>
+                上传封面
+              </Button>
+            </Upload>
+          </Space.Compact>
+        </Form.Item>
+        <Space className="w-full" size="large">
+          <Form.Item name="category" label="主分类" style={{ minWidth: 200 }}>
+            <AutoComplete
+              placeholder="选择或输入分类"
+              options={CATEGORY_SUGGESTIONS.map((c) => ({ value: c }))}
+              filterOption={(input, option) => (option?.value as string).includes(input)}
+            />
+          </Form.Item>
+          <Form.Item name="seriesStatus" label="连载状态" rules={[{ required: true }]}>
+            <Select
+              style={{ width: 140 }}
+              options={[
+                { value: 1, label: '连载中' },
+                { value: 2, label: '已完结' },
+              ]}
+            />
+          </Form.Item>
+        </Space>
+        <Form.Item name="tagList" label="标签(3-8 个,回车添加)">
+          <Select mode="tags" placeholder="如:重生 / 系统 / 异能" open={false} tokenSeparators={[',']} />
+        </Form.Item>
+        <Typography.Text type="secondary" className="text-xs">
+          内容 ID({project.contentUid})由系统生成且不可修改,用于未来漫画平台导入对齐。
+        </Typography.Text>
+      </Form>
+    </Modal>
   );
 }
 
@@ -228,6 +424,15 @@ function AssetsTab({
 
 function ProjectStatusTag({ status }: { status: number }) {
   const meta = PROJECT_STATUS[status] ?? { label: '未知', color: 'default' };
+  return (
+    <Tag color={meta.color} bordered={false} style={{ marginRight: 0 }}>
+      {meta.label}
+    </Tag>
+  );
+}
+
+function SeriesStatusTag({ status }: { status: number | null }) {
+  const meta = SERIES_STATUS[status ?? 2] ?? { label: '已完结', color: 'green' };
   return (
     <Tag color={meta.color} bordered={false} style={{ marginRight: 0 }}>
       {meta.label}

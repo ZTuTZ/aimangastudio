@@ -5,18 +5,33 @@ export type AspectRatio = '3:4' | '2:3' | '1:1' | '16:9';
 
 export interface ProjectVO {
   id: number;
+  contentUid: string;
   title: string;
   status: number; // 0准备中 1待出图 2出图中 3完成 4部分失败
   aspectRatio: string;
   colorMode: string;
   stylePresetId: number | null;
   tagline: string | null;
+  description: string | null;
+  coverUrl: string | null;
+  category: string | null;
+  tags: string | null; // JSON 数组字符串,如 ["重生","系统"]
+  seriesStatus: number | null; // 1连载中 2已完结
   sourceText?: string | null;
   createTime: string;
   updateTime: string;
   chapterCount: number;
   pageCount: number;
 }
+
+/** 连载状态 */
+export const SERIES_STATUS: Record<number, { label: string; color: string }> = {
+  1: { label: '连载中', color: 'blue' },
+  2: { label: '已完结', color: 'green' },
+};
+
+/** SPLIT 元数据建议分类(允许自定义输入) */
+export const CATEGORY_SUGGESTIONS = ['古风', '都市', '恋爱', '悬疑', '科幻', '奇幻', '热血', '搞笑', '治愈', '校园', '其他'];
 
 export interface ChapterVO {
   id: number;
@@ -95,8 +110,21 @@ export const projectsApi = {
     if (settings.stylePresetId) form.append('stylePresetId', String(settings.stylePresetId));
     return unwrap<ProjectVO[]>(http.post('/projects/import', form, { timeout: 120000 }));
   },
-  update: (id: number, data: Partial<{ title: string; aspectRatio: string; colorMode: string; stylePresetId: number | null; tagline: string }>) =>
-    unwrap<ProjectVO>(http.put(`/projects/${id}`, data)),
+  update: (
+    id: number,
+    data: Partial<{
+      title: string;
+      aspectRatio: string;
+      colorMode: string;
+      stylePresetId: number | null;
+      tagline: string;
+      description: string;
+      coverUrl: string;
+      category: string;
+      tags: string;
+      seriesStatus: number;
+    }>,
+  ) => unwrap<ProjectVO>(http.put(`/projects/${id}`, data)),
   remove: (id: number) => unwrap<void>(http.delete(`/projects/${id}`)),
   chapters: (projectId: number) => unwrap<ChapterVO[]>(http.get(`/projects/${projectId}/chapters`)),
   createChapter: (projectId: number, data: { title?: string; scriptText?: string }) =>

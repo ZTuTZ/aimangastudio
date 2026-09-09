@@ -46,12 +46,17 @@ public class ProjectService extends ServiceImpl<ProjectMapper, Project> {
     public Project create(String title, String sourceText, String aspectRatio, String colorMode, Long stylePresetId) {
         Project project = new Project();
         project.setUserId(CurrentUser.id());
+        // 跨系统稳定 ID:创建时生成,此后任何操作(改标题/重拆话/重出图)都不得改变
+        project.setContentUid(java.util.UUID.randomUUID().toString());
         project.setTitle(title);
         project.setSourceText(sourceText);
         project.setAspectRatio(normalizeAspect(aspectRatio, "3:4"));
         project.setColorMode(normalizeColorMode(colorMode, "partial"));
         project.setStylePresetId(stylePresetId);
         project.setStatus(Project.STATUS_PREPARING);
+        project.setCategory("");
+        project.setTags("[]");
+        project.setSeriesStatus(Project.SERIES_COMPLETED);
         project.setCreateTime(LocalDateTime.now());
         save(project);
         // Phase 5:此处按 feature_auto_split 开关入队 SPLIT 拆话任务
@@ -77,12 +82,18 @@ public class ProjectService extends ServiceImpl<ProjectMapper, Project> {
                 .eq(PageEntity::getProjectId, project.getId()));
         ProjectVO vo = new ProjectVO();
         vo.setId(project.getId());
+        vo.setContentUid(project.getContentUid());
         vo.setTitle(project.getTitle());
         vo.setStatus(project.getStatus());
         vo.setAspectRatio(project.getAspectRatio());
         vo.setColorMode(project.getColorMode());
         vo.setStylePresetId(project.getStylePresetId());
         vo.setTagline(project.getTagline());
+        vo.setDescription(project.getDescription());
+        vo.setCoverUrl(project.getCoverUrl());
+        vo.setCategory(project.getCategory());
+        vo.setTags(project.getTags());
+        vo.setSeriesStatus(project.getSeriesStatus());
         vo.setSourceText(project.getSourceText());
         vo.setCreateTime(project.getCreateTime());
         vo.setUpdateTime(project.getUpdateTime());
@@ -110,9 +121,48 @@ public class ProjectService extends ServiceImpl<ProjectMapper, Project> {
         if (request.tagline() != null) {
             patch.setTagline(request.tagline());
         }
+        if (request.description() != null) {
+            patch.setDescription(request.description());
+        }
+        if (request.coverUrl() != null) {
+            patch.setCoverUrl(request.coverUrl().isBlank() ? null : request.coverUrl().trim());
+        }
+        if (request.category() != null) {
+            patch.setCategory(request.category().isBlank() ? "" : request.category().trim());
+        }
+        if (request.tags() != null) {
+            patch.setTags(normalizeTags(request.tags()));
+        }
+        if (request.seriesStatus() != null) {
+            if (request.seriesStatus() != Project.SERIES_ONGOING && request.seriesStatus() != Project.SERIES_COMPLETED) {
+                throw new BusinessException(400, "连载状态只能为 1(连载中) 或 2(已完结)");
+            }
+            patch.setSeriesStatus(request.seriesStatus());
+        }
+        // 注意:content_uid 永不在此更新(请求 DTO 中即不含该字段)
         patch.setUpdateTime(LocalDateTime.now());
         updateById(patch);
         return getById(id);
+    }
+
+    /**
+     * 标签规范化:空 → "[]";必须是合法 JSON 数组;其他结构视为非法。
+     */
+    static String normalizeTags(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "[]";
+        }
+        String trimmed = raw.trim();
+        com.fasterxml.jackson.databind.JsonNode node;
+        try {
+            node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(trimmed);
+        } catch (Exception e) {
+            throw new BusinessException(400, "标签格式不正确,应为 JSON 数组,如 [\"重生\",\"系统\"]");
+        }
+        if (!node.isArray()) {
+            throw new BusinessException(400, "标签格式不正确,应为 JSON 数组,如 [\"重生\",\"系统\"]");
+        }
+        return trimmed;
     }
 
     private static String normalizeAspect(String value, String fallback) {
