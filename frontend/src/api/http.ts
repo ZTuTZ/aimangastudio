@@ -66,9 +66,23 @@ http.interceptors.response.use(undefined, async (error: AxiosError<ApiResult<unk
 
 /** 解包统一响应:code!=0 抛业务错误,成功返回 data */
 export async function unwrap<T>(promise: Promise<AxiosResponse<ApiResult<T>>>): Promise<T> {
-  const { data } = await promise;
-  if (data.code !== 0) {
-    throw new Error(data.message || '请求失败');
+  try {
+    const { data } = await promise;
+    if (data.code !== 0) {
+      throw new Error(data.message || '请求失败');
+    }
+    return data.data;
+  } catch (e) {
+    // 把后端 {code,message} 体里的 message 转为业务错误,避免 UI 显示
+    // "Request failed with status code xxx" 这类原始报错
+    if (axios.isAxiosError(e)) {
+      const body = e.response?.data as Partial<ApiResult<unknown>> | undefined;
+      const friendly = body?.message;
+      if (friendly) {
+        throw new Error(friendly);
+      }
+      throw new Error(`请求失败(${e.response?.status ?? '网络异常'})`);
+    }
+    throw e;
   }
-  return data.data;
 }
