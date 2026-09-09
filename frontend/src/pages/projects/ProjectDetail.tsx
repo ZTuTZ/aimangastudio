@@ -1,4 +1,4 @@
-import { App, Button, Card, Descriptions, Form, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
+import { App, Button, Card, Descriptions, Form, Input, Modal, Segmented, Select, Space, Table, Tabs, Tag, Typography } from 'antd';
 import { ArrowLeftOutlined, PlusOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -24,13 +24,18 @@ export function ProjectDetail() {
 
   const [chapterModal, setChapterModal] = useState<{ open: boolean; chapter?: ChapterVO }>({ open: false });
   const [assetModal, setAssetModal] = useState<{ open: boolean; asset?: AssetVO }>({ open: false });
+  const [assetCategory, setAssetCategory] = useState<number>(1); // 默认展示「角色」
 
   if (!project) {
     return <Card loading />;
   }
 
+  const chapterCount = chapters?.length ?? 0;
+  const assetCount = assets?.length ?? 0;
+
   return (
     <div className="flex flex-col gap-4">
+      {/* 基本信息(保持原状) */}
       <Card styles={{ body: { padding: 20 } }}>
         <div className="flex items-center justify-between">
           <Space>
@@ -59,84 +64,35 @@ export function ProjectDetail() {
         />
       </Card>
 
-      <Card title="话 / 章节(第一步流水线产出,Phase 5 上线)" styles={{ body: { paddingTop: 8 } }}>
-        <Table<ChapterVO>
-          rowKey="id"
-          size="small"
-          dataSource={chapters ?? []}
-          pagination={false}
-          locale={{ emptyText: '暂无话/章节 —— 上传作品后,任务系统将自动拆话并生成脚本(Phase 5)' }}
-          columns={[
-            { title: '话号', dataIndex: 'chapterNo', width: 70 },
-            { title: '标题', dataIndex: 'title' },
+      {/* 三个工作区改为 Tab */}
+      <Card styles={{ body: { paddingTop: 4 } }}>
+        <Tabs
+          defaultActiveKey="chapters"
+          items={[
             {
-              title: '状态',
-              dataIndex: 'status',
-              width: 110,
-              render: (s: number) =>
-                s === 2 ? <Tag color="green">脚本就绪</Tag> : s === 0 ? <Tag>待处理</Tag> : <Tag color="blue">处理中</Tag>,
+              key: 'chapters',
+              label: `话 / 章节 (${chapterCount})`,
+              children: <ChaptersTab chapters={chapters ?? []} onEdit={(chapter) => setChapterModal({ open: true, chapter })} onAdd={() => setChapterModal({ open: true })} />,
             },
-            { title: '页数', dataIndex: 'pageCount', width: 70 },
             {
-              title: '操作',
-              width: 90,
-              render: (_, row) => (
-                <Button size="small" onClick={() => setChapterModal({ open: true, chapter: row })}>
-                  编辑
-                </Button>
+              key: 'assets',
+              label: `资产库 (${assetCount})`,
+              children: (
+                <AssetsTab
+                  assets={assets ?? []}
+                  category={assetCategory}
+                  onCategoryChange={setAssetCategory}
+                  onEdit={(asset) => setAssetModal({ open: true, asset })}
+                  onAdd={() => setAssetModal({ open: true })}
+                />
               ),
             },
+            {
+              key: 'generate',
+              label: '生成成品',
+              children: <ComingSoon title="" items={['选择范围(整部剧/按话)与色彩模式,一键生成成品页(Phase 6)']} />,
+            },
           ]}
-        />
-        <Button
-          size="small"
-          icon={<PlusOutlined />}
-          className="mt-3"
-          onClick={() => setChapterModal({ open: true })}
-        >
-          新增话
-        </Button>
-      </Card>
-
-      <Card title="资产库(角色 / 场景 / 道具 / 服装)">
-        <div className="flex flex-col gap-3">
-          {[1, 2, 3, 4].map((type) => {
-            const list = (assets ?? []).filter((a) => a.assetType === type);
-            return (
-              <div key={type}>
-                <Typography.Text type="secondary" className="text-xs">
-                  {ASSET_TYPE_NAMES[type]}({list.length})
-                </Typography.Text>
-                <div className="flex flex-wrap gap-2 mt-1">
-                  {list.length === 0 && <Typography.Text type="secondary">—</Typography.Text>}
-                  {list.map((asset) => (
-                    <button
-                      key={asset.id}
-                      className="px-3 py-1.5 rounded-lg border border-gray-200 text-sm hover:border-indigo-400 hover:text-indigo-500"
-                      onClick={() => setAssetModal({ open: true, asset })}
-                    >
-                      {asset.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-          <Button
-            size="small"
-            icon={<PlusOutlined />}
-            className="mt-1"
-            onClick={() => setAssetModal({ open: true })}
-          >
-            新增资产
-          </Button>
-        </div>
-      </Card>
-
-      <Card title="生成成品">
-        <ComingSoon
-          title=""
-          items={['选择范围(整部剧/按话)与色彩模式,一键生成成品页(Phase 6)']}
         />
       </Card>
 
@@ -148,8 +104,124 @@ export function ProjectDetail() {
       <AssetEditModal
         state={assetModal}
         projectId={projectId}
+        defaultType={assetCategory}
         onClose={() => setAssetModal({ open: false })}
       />
+    </div>
+  );
+}
+
+/** 话 / 章节 Tab */
+function ChaptersTab({
+  chapters,
+  onEdit,
+  onAdd,
+}: {
+  chapters: ChapterVO[];
+  onEdit: (chapter: ChapterVO) => void;
+  onAdd: () => void;
+}) {
+  return (
+    <div>
+      <Table<ChapterVO>
+        rowKey="id"
+        size="small"
+        dataSource={chapters}
+        pagination={false}
+        locale={{ emptyText: '暂无话/章节 —— 上传作品后,任务系统将自动拆话并生成脚本(Phase 5)' }}
+        columns={[
+          { title: '话号', dataIndex: 'chapterNo', width: 70 },
+          { title: '标题', dataIndex: 'title' },
+          {
+            title: '状态',
+            dataIndex: 'status',
+            width: 110,
+            render: (s: number) =>
+              s === 2 ? <Tag color="green" bordered={false}>脚本就绪</Tag> : s === 0 ? <Tag bordered={false}>待处理</Tag> : <Tag color="blue" bordered={false}>处理中</Tag>,
+          },
+          { title: '页数', dataIndex: 'pageCount', width: 70 },
+          {
+            title: '操作',
+            width: 80,
+            render: (_, row) => (
+              <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => onEdit(row)}>
+                编辑
+              </Button>
+            ),
+          },
+        ]}
+      />
+      <Button size="small" icon={<PlusOutlined />} className="mt-3" onClick={onAdd}>
+        新增话
+      </Button>
+    </div>
+  );
+}
+
+/** 资产库 Tab:四类分类标签,默认选中「角色」 */
+function AssetsTab({
+  assets,
+  category,
+  onCategoryChange,
+  onEdit,
+  onAdd,
+}: {
+  assets: AssetVO[];
+  category: number;
+  onCategoryChange: (v: number) => void;
+  onEdit: (asset: AssetVO) => void;
+  onAdd: () => void;
+}) {
+  const countOf = (type: number) => assets.filter((a) => a.assetType === type).length;
+  const list = assets.filter((a) => a.assetType === category);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <Segmented
+          value={category}
+          onChange={(v) => onCategoryChange(Number(v))}
+          options={[1, 2, 3, 4].map((type) => ({
+            value: type,
+            label: `${ASSET_TYPE_NAMES[type]}(${countOf(type)})`,
+          }))}
+        />
+        <Button size="small" icon={<PlusOutlined />} onClick={onAdd}>
+          新增{ASSET_TYPE_NAMES[category]}
+        </Button>
+      </div>
+
+      {list.length === 0 ? (
+        <Typography.Text type="secondary">
+          暂无{ASSET_TYPE_NAMES[category]}资产 —— 第一步流水线会自动从脚本中提取(Phase 5)
+        </Typography.Text>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+          {list.map((asset) => (
+            <button
+              key={asset.id}
+              className="text-left p-3 rounded-xl border border-gray-200 hover:border-indigo-400 hover:shadow-sm transition bg-white"
+              onClick={() => onEdit(asset)}
+            >
+              <div className="flex items-center gap-2">
+                <Typography.Text strong ellipsis className="flex-1">
+                  {asset.name}
+                </Typography.Text>
+                {asset.sheetImageUrl ? (
+                  <Tag color="green" bordered={false} style={{ marginRight: 0 }}>
+                    已有设定表
+                  </Tag>
+                ) : null}
+              </div>
+              {asset.description && (
+                <Typography.Paragraph type="secondary" className="mt-1 mb-0 text-xs" ellipsis={{ rows: 2, tooltip: asset.description }}>
+                  {asset.description}
+                </Typography.Paragraph>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -165,7 +237,7 @@ function ProjectStatusTag({ status }: { status: number }) {
 
 function ColorModeTag({ mode }: { mode: string }) {
   const label = mode === 'partial' ? '局部上色' : mode === 'monochrome' ? '黑白' : mode === 'color' ? '全彩' : mode;
-  return <Tag>{label}</Tag>;
+  return <Tag bordered={false}>{label}</Tag>;
 }
 
 function PresetSelect({
@@ -263,10 +335,12 @@ function ChapterEditModal({
 function AssetEditModal({
   state,
   projectId,
+  defaultType,
   onClose,
 }: {
   state: { open: boolean; asset?: AssetVO };
   projectId: number;
+  defaultType: number;
   onClose: () => void;
 }) {
   const { message } = App.useApp();
@@ -304,7 +378,7 @@ function AssetEditModal({
   return (
     <Modal
       open={state.open}
-      title={state.asset ? `编辑资产「${state.asset.name}」` : '新增资产'}
+      title={state.asset ? `编辑资产「${state.asset.name}」` : `新增${ASSET_TYPE_NAMES[defaultType] ?? '资产'}`}
       okText="保存"
       cancelText="取消"
       confirmLoading={saving}
@@ -325,7 +399,7 @@ function AssetEditModal({
                 structured: state.asset.structured ?? '',
                 referenceUrl: state.asset.referenceUrl ?? '',
               }
-            : { assetType: 1 }
+            : { assetType: defaultType }
         }
       >
         <Space className="w-full" size="large">
