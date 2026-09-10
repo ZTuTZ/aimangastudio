@@ -85,7 +85,10 @@ public class SplitTaskHandler implements TaskHandler {
         runtime.begin(3);
 
         // 1. 滚动小包规划(AI 只回边界,Java 按 offset 切片)
-        List<ChapterPlan> plans = planner.plan(sourceText, units, runtime::setProgress);
+        List<ChapterPlan> plans = planner.plan(sourceText, units, p -> {
+            runtime.checkStop(); // 每包之间感知停止
+            runtime.setProgress(p);
+        });
         runtime.stepSuccess();
 
         // 2. 覆盖校验通过后一次性重建话(事务)

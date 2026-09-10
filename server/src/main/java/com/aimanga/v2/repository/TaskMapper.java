@@ -23,7 +23,7 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
     /** 终态写入:带执行锁校验,防止看门狗/双 Worker 互踩 */
     @Update("UPDATE task SET status = #{status}, progress = #{progress}, error = #{error}, " +
             "last_error = #{error}, end_time = NOW(), claim_token = NULL, heartbeat_time = NULL " +
-            "WHERE id = #{id} AND claim_token = #{token} AND status = 1")
+            "WHERE id = #{id} AND claim_token = #{token} AND status IN (1, 6)")
     int finishTask(@Param("id") Long id, @Param("token") String token, @Param("status") int status,
                    @Param("progress") int progress, @Param("error") String error);
 
