@@ -45,4 +45,12 @@ public class TaskVO {
     private LocalDateTime endTime;
 
     private String projectTitle;
+
+    /** 看门狗自动重试次数/上限 */
+    private Integer retryCount;
+
+    private Integer maxRetryCount;
+
+    /** 最后一次错误记录 */
+    private String lastError;
 }
