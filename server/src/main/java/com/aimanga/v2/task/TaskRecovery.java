@@ -22,9 +22,15 @@ public class TaskRecovery implements ApplicationRunner {
 
     private final TaskMapper taskMapper;
     private final TaskQueue taskQueue;
+    private final com.aimanga.v2.task.RedisSemaphores semaphores;
 
     @Override
     public void run(ApplicationArguments args) {
+        // 1. 清除上次停机残留的毒丸(否则 Worker 被毒死,任务永远排队)
+        taskQueue.purgePoison();
+        // 2. 重置并发信号量(启动瞬间无在跑任务,停机泄漏的许可此时清零最安全)
+        semaphores.resetAll();
+        // 3. 未完成任务重新入队
         List<TaskEntity> active = taskMapper.selectList(new LambdaQueryWrapper<TaskEntity>()
                 .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.STOPPING)
                 .orderByAsc(TaskEntity::getId));

@@ -2,6 +2,7 @@ package com.aimanga.v2.task;
 
 import com.aimanga.v2.service.ConfigService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RSemaphore;
 import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Component;
@@ -16,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 配置热更新:refresh() 按新配置值调整已存在信号量的许可数(增加→release,减少→尝试回收空闲许可)。
  * 活跃 key 记录在 aimanga:v2:sem:active,便于全量刷新。
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class RedisSemaphores {
@@ -60,6 +62,16 @@ public class RedisSemaphores {
                     : configService.getInt("ai_" + name.substring(3) + "_concurrency", 10);
             adjust(redissonClient.getSemaphore(semKey(group, name)), target);
         }
+    }
+
+    /**
+     * 启动时全量重置:MySQL 是任务唯一事实,启动瞬间没有任何任务在跑,
+     * 上次停机(尤其强杀)泄漏的许可此时清零最安全。
+     */
+    public void resetAll() {
+        localNames.clear();
+        redissonClient.getKeys().deleteByPattern("aimanga:v2:sem:*");
+        log.info("[semaphore] 已重置全部并发信号量(消除停机泄漏的许可)");
     }
 
     private boolean tryAcquire(String group, String name, int permits) {

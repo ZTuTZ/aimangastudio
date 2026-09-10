@@ -36,8 +36,20 @@ public class TaskWorkerPool {
 
     @PostConstruct
     public void start() {
+        purgePoisonPills(); // 上次优雅停机残留的毒丸必须清掉,否则新 Worker 会被毒死退出
         refresh(configService.getInt("task_max_concurrency", 5));
         log.info("[task] Worker 池已启动,全局并行任务数={}", poolSize.get());
+    }
+
+    /** 清除队列中残留的毒丸(毒丸只在优雅停机时投递,重启后若不清除会毒死全部新 Worker) */
+    private void purgePoisonPills() {
+        int removed = 0;
+        while (taskQueue.removePoison()) {
+            removed++;
+        }
+        if (removed > 0) {
+            log.warn("[task] 已清除队列中残留的 {} 颗毒丸", removed);
+        }
     }
 
     /** 配置热更新入口(保存系统配置后调用) */
