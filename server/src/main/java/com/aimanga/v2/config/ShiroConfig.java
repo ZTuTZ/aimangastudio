@@ -35,6 +35,9 @@ public class ShiroConfig {
         sessionManager.setSessionIdCookieEnabled(false);
         sessionManager.setSessionIdUrlRewritingEnabled(false);
         manager.setSessionManager(sessionManager);
+        // 绑定 VM 单例:Tomcat 对 SSE 断开的异步 error dispatch 不经过 Shiro 过滤链时,
+        // SecurityUtils.getSubject() 仍可用,避免 UnavailableSecurityManagerException 刷屏
+        org.apache.shiro.SecurityUtils.setSecurityManager(manager);
         return manager;
     }
 

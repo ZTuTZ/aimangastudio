@@ -103,14 +103,30 @@ public class TaskSseHub {
         try {
             emitter.send(SseEmitter.event().name(event).data(data));
         } catch (Exception e) {
+            // 客户端已断开:移除并安全关闭(响应已死时 complete() 自身也会抛错,必须再包一层)
+            removeEmitter(emitter);
+            safeComplete(emitter);
+        }
+    }
+
+    private void removeEmitter(SseEmitter emitter) {
+        userEmitters.values().forEach(list -> list.remove(emitter));
+        adminEmitters.remove(emitter);
+    }
+
+    private void safeComplete(SseEmitter emitter) {
+        try {
             emitter.complete();
+        } catch (Exception ignored) {
+            // 响应已死,无需处理
         }
     }
 
     private void pingAll() {
+        String ping = "{\"ts\":" + System.currentTimeMillis() + "}";
         for (List<SseEmitter> list : userEmitters.values()) {
-            list.forEach(emitter -> send(emitter, "ping", "{\"ts\":" + System.currentTimeMillis() + "}"));
+            list.forEach(emitter -> send(emitter, "ping", ping));
         }
-        adminEmitters.keySet().forEach(emitter -> send(emitter, "ping", "{\"ts\":" + System.currentTimeMillis() + "}"));
+        adminEmitters.keySet().forEach(emitter -> send(emitter, "ping", ping));
     }
 }

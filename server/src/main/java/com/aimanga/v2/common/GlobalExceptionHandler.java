@@ -5,11 +5,19 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    /** SSE 客户端断开后的写入异常:响应已不可用,静默标记已处理(避免往 event-stream 写 JSON 的二次报错) */
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public ResponseEntity<Result<Void>> asyncNotUsable(AsyncRequestNotUsableException e) {
+        log.debug("[sse] 客户端连接已断开: {}", e.getMessage());
+        return null;
+    }
 
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<Result<Void>> business(BusinessException e) {
