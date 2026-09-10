@@ -35,11 +35,13 @@ public class TaskRecovery implements ApplicationRunner {
                 .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.STOPPING)
                 .orderByAsc(TaskEntity::getId));
         for (TaskEntity task : active) {
-            TaskEntity patch = new TaskEntity();
-            patch.setId(task.getId());
-            patch.setStatus(TaskStatus.PENDING);
-            patch.setError("");
-            taskMapper.updateById(patch);
+            // 清执行锁/心跳(updateById 忽略 null,须用 UpdateWrapper 显式置空)
+            taskMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<TaskEntity>()
+                    .eq(TaskEntity::getId, task.getId())
+                    .set(TaskEntity::getStatus, TaskStatus.PENDING)
+                    .set(TaskEntity::getError, "")
+                    .set(TaskEntity::getClaimToken, null)
+                    .set(TaskEntity::getHeartbeatTime, null));
             taskQueue.enqueue(task.getId());
         }
         if (!active.isEmpty()) {

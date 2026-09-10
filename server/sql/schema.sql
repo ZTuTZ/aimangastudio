@@ -121,10 +121,18 @@ CREATE TABLE IF NOT EXISTS `task` (
   `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `start_time` DATETIME DEFAULT NULL,
   `end_time` DATETIME DEFAULT NULL,
+  `heartbeat_time` DATETIME DEFAULT NULL COMMENT 'Worker心跳',
+  `claim_token` VARCHAR(64) NULL COMMENT '任务执行锁(领取时生成,终态校验)',
+  `retry_count` INT NOT NULL DEFAULT 0 COMMENT '看门狗自动重试次数',
+  `max_retry_count` INT NOT NULL DEFAULT 3 COMMENT '最大自动重试次数',
+  `timeout_seconds` INT NOT NULL DEFAULT 600 COMMENT '心跳超时阈值(秒),超过判定僵尸',
+  `processed_count` INT NOT NULL DEFAULT 0 COMMENT '已处理步数(成功+失败)',
+  `last_error` TEXT NULL COMMENT '最后一次错误记录',
   PRIMARY KEY (`id`),
   KEY `idx_task_user` (`user_id`),
   KEY `idx_task_status` (`status`),
   KEY `idx_task_project` (`project_id`),
+  KEY `idx_task_watch` (`status`, `heartbeat_time`),
   CONSTRAINT `fk_task_project` FOREIGN KEY (`project_id`) REFERENCES `project` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='任务';
 

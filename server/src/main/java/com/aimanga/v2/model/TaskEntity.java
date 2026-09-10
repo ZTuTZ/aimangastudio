@@ -52,4 +52,25 @@ public class TaskEntity {
     private LocalDateTime startTime;
 
     private LocalDateTime endTime;
+
+    /** Worker 心跳(看门狗据此判定僵尸任务) */
+    private LocalDateTime heartbeatTime;
+
+    /** 任务执行锁:领取时生成,终态写入时校验,防止双 Worker/看门狗互踩 */
+    private String claimToken;
+
+    /** 看门狗自动重试次数 */
+    private Integer retryCount;
+
+    /** 最大自动重试次数 */
+    private Integer maxRetryCount;
+
+    /** 心跳超时阈值(秒),超过判定僵尸 */
+    private Integer timeoutSeconds;
+
+    /** 已处理步数(成功+失败) */
+    private Integer processedCount;
+
+    /** 最后一次错误记录 */
+    private String lastError;
 }

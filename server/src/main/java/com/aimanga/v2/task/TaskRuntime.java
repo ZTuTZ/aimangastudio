@@ -91,6 +91,7 @@ public class TaskRuntime {
         patch.setTotalCount(total);
         patch.setSuccessCount(success.get());
         patch.setFailCount(fail.get());
+        patch.setProcessedCount(success.get() + fail.get());
         patch.setProgress(progress);
         taskMapper.updateById(patch);
         publisher.publishProgress(task, progress, success.get(), fail.get(), total);

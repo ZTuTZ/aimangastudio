@@ -127,24 +127,30 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         return latest;
     }
 
-    /** 重试:终态任务重置为排队中并重新入队(保留断点 current_no) */
+    /** 重试:终态任务重置为排队中并重新入队(保留断点 current_no;清执行锁/心跳;重置自动重试计数) */
     public TaskEntity retry(Long taskId) {
         TaskEntity task = requireAccessible(taskId);
         int status = task.getStatus() == null ? TaskStatus.PENDING : task.getStatus();
         if (TaskStatus.active(status)) {
             throw new BusinessException(409, "任务进行中,不能重试");
         }
-        TaskEntity patch = new TaskEntity();
-        patch.setId(taskId);
-        patch.setStatus(TaskStatus.PENDING);
-        patch.setProgress(0);
-        patch.setSuccessCount(0);
-        patch.setFailCount(0);
-        patch.setTotalCount(0);
-        patch.setError("");
-        patch.setEndTime(null);
-        patch.setStartTime(null);
-        updateById(patch);
+        // 清执行锁/心跳/时间(updateById 忽略 null,须用 UpdateWrapper 显式置空);人工重试重置自动重试计数
+        int updated = baseMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<TaskEntity>()
+                .eq(TaskEntity::getId, taskId)
+                .set(TaskEntity::getStatus, TaskStatus.PENDING)
+                .set(TaskEntity::getProgress, 0)
+                .set(TaskEntity::getSuccessCount, 0)
+                .set(TaskEntity::getFailCount, 0)
+                .set(TaskEntity::getTotalCount, 0)
+                .set(TaskEntity::getError, "")
+                .set(TaskEntity::getRetryCount, 0)
+                .set(TaskEntity::getClaimToken, null)
+                .set(TaskEntity::getHeartbeatTime, null)
+                .set(TaskEntity::getEndTime, null)
+                .set(TaskEntity::getStartTime, null));
+        if (updated == 0) {
+            throw new BusinessException(500, "重试失败,请稍后再试");
+        }
         taskQueue.enqueue(taskId);
         TaskEntity latest = getById(taskId);
         publisher.publishStatus(latest, TaskStatus.PENDING, "已重新入队");
@@ -180,6 +186,9 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         vo.setCreateTime(task.getCreateTime());
         vo.setStartTime(task.getStartTime());
         vo.setEndTime(task.getEndTime());
+        vo.setRetryCount(task.getRetryCount());
+        vo.setMaxRetryCount(task.getMaxRetryCount());
+        vo.setLastError(task.getLastError());
         vo.setProjectTitle(projectTitle);
         return vo;
     }

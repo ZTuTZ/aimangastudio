@@ -80,6 +80,16 @@ public class TaskWorkerPool {
         if (pool != null) {
             taskQueue.poison(poolSize.get());
             pool.shutdown();
+            try {
+                // 优雅停机:等待运行中任务完成(最多 30 秒),超时交给 Recovery 接管
+                if (!pool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                    log.warn("[task] Worker 池 30 秒内未完成,剩余任务将由重启恢复接管");
+                    pool.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                pool.shutdownNow();
+            }
         }
         log.info("[task] Worker 池已关闭");
     }
