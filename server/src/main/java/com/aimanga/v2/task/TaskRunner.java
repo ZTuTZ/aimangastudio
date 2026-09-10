@@ -62,7 +62,7 @@ public class TaskRunner {
             log.info("[task] 任务被用户停止 taskId={}", taskId);
             finish(running, runtime, TaskStatus.STOPPED, "已停止");
         } catch (BusinessException e) {
-            log.warn("[task] 任务失败 taskId={}: {}", taskId, e.getMessage());
+            log.warn("[task] 任务失败 taskId={}: {}", taskId, e.getMessage(), e);
             finish(running, runtime, TaskStatus.FAILED, e.getMessage());
         } catch (Exception e) {
             log.error("[task] 任务异常 taskId={}", taskId, e);

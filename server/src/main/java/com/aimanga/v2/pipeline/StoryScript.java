@@ -27,6 +27,8 @@ public record StoryScript(
 
     public record PageItem(
             Integer page,
+            Integer sourceStartUnit,
+            Integer sourceEndUnit,
             String narration,
             List<DialogueItem> dialogue,
             String visual) {

@@ -16,6 +16,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -43,6 +44,7 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
     private final TaskEventPublisher publisher;
     private final ObjectMapper objectMapper;
     private final com.aimanga.v2.repository.ProjectMapper projectMapper;
+    private final RedissonClient redissonClient;
 
     public TaskVO create(CreateTaskRequest request) {
         String type = request.taskType() == null ? "" : request.taskType().trim().toUpperCase();
@@ -214,6 +216,38 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         taskQueue.enqueue(task.getId());
         publisher.publishCreated(task);
         return task;
+    }
+
+    /**
+     * 链式任务去重入队:同一 (projectId, chapterId, type) 在 PENDING/RUNNING 时只允许存在一个,
+     * 防止多个 SCRIPT 并发结束时重复入队 SHEET/ASSET。Redisson 短锁内查询 + 创建。
+     */
+    public boolean enqueueUnique(Long projectId, Long chapterId, String type, String payloadJson) {
+        String lockKey = "aimanga:v2:enqueue:" + projectId + ":" + (chapterId == null ? 0 : chapterId) + ":" + type;
+        org.redisson.api.RLock lock = redissonClient.getLock(lockKey);
+        try {
+            if (!lock.tryLock(0, 10, java.util.concurrent.TimeUnit.SECONDS)) {
+                return false; // 另一个线程正在入队同一链任务
+            }
+            try {
+                Long active = baseMapper.selectCount(new LambdaQueryWrapper<TaskEntity>()
+                        .eq(TaskEntity::getProjectId, projectId)
+                        .eq(chapterId != null, TaskEntity::getChapterId, chapterId)
+                        .isNull(chapterId == null, TaskEntity::getChapterId)
+                        .eq(TaskEntity::getTaskType, type)
+                        .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.STOPPING));
+                if (active != null && active > 0) {
+                    return false;
+                }
+                createSystemTask(projectId, chapterId, type, payloadJson);
+                return true;
+            } finally {
+                lock.unlock();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     private Long extractPageId(com.fasterxml.jackson.databind.JsonNode payload) {

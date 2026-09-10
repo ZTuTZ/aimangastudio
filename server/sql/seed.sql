@@ -33,6 +33,15 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_group`, `rema
 ('prompt_colorize', '', 'prompt', '上色提示词'),
 ('prompt_clean', '', 'prompt', '清晰化提示词'),
 ('prompt_repaint', '', 'prompt', '局部重绘提示词({prompt})'),
+-- 流水线(长剧本规划/资产分包/脚本资产上下文)
+('split_pack_max_chars', '8000', 'pipeline', '拆话滚动分包单包最大字数'),
+('split_target_chars_per_page', '60', 'pipeline', '拆话目标:每页原文 Approx 字数'),
+('split_min_chars_per_page', '35', 'pipeline', '拆话目标:每页最少字数(短末话自适应页数)'),
+('split_max_chars_per_page', '90', 'pipeline', '拆话目标:每页最多字数'),
+('asset_pack_max_chapters', '5', 'pipeline', '资产提取分包:每包最多话数'),
+('asset_pack_max_chars', '12000', 'pipeline', '资产提取分包:每包最大字数'),
+('asset_pack_concurrency', '2', 'pipeline', '资产提取:单任务内分包并发'),
+('script_asset_context_max', '30', 'pipeline', 'SCRIPT 注入的标准资产上下文上限'),
 -- 任务并发(四层)
 ('task_max_concurrency', '5', 'task', '全局并行任务数(Worker 线程数)'),
 ('task_user_concurrency', '2', 'task', '每用户并行任务数(Redis 信号量)'),

@@ -8,10 +8,12 @@ import com.aimanga.v2.repository.ChapterMapper;
 import com.aimanga.v2.repository.PageMapper;
 import com.aimanga.v2.repository.ProjectMapper;
 import com.aimanga.v2.repository.StylePresetMapper;
+import com.aimanga.v2.repository.TaskMapper;
 import com.aimanga.v2.service.ConfigService;
 import com.aimanga.v2.service.TaskService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
+import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -29,8 +31,10 @@ public class PipelineContext {
     public final PageMapper pageMapper;
     public final AssetMapper assetMapper;
     public final StylePresetMapper stylePresetMapper;
+    public final TaskMapper taskMapper;
     public final ConfigService configService;
     private final TaskService taskService;
+    private final RedissonClient redissonClient;
 
     public Project project(Long id) {
         Project project = projectMapper.selectById(id);
@@ -80,6 +84,17 @@ public class PipelineContext {
             // 链式入队失败不影响当前任务成功状态,人工可在任务中心手动补
             org.slf4j.LoggerFactory.getLogger(PipelineContext.class)
                     .error("[pipeline] 链式入队失败 type={} projectId={}: {}", type, projectId, e.getMessage());
+        }
+    }
+
+    /** 链式去重入队:同一 (projectId, chapterId, type) 在 PENDING/RUNNING 时只保留一个,防并发竞态 */
+    public boolean enqueueUnique(Long projectId, Long chapterId, String type, String payloadJson) {
+        try {
+            return taskService.enqueueUnique(projectId, chapterId, type, payloadJson);
+        } catch (Exception e) {
+            org.slf4j.LoggerFactory.getLogger(PipelineContext.class)
+                    .error("[pipeline] 去重入队失败 type={} projectId={}: {}", type, projectId, e.getMessage());
+            return false;
         }
     }
 

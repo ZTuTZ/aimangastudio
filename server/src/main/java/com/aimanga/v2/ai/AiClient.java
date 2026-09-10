@@ -151,7 +151,7 @@ public class AiClient {
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
-            throw new BusinessException(502, "AI 请求失败: " + e.getMessage());
+            throw new BusinessException(502, "AI 请求失败: " + describe(e));
         }
     }
 
@@ -210,7 +210,7 @@ public class AiClient {
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
-            throw new BusinessException(502, "AI 请求失败: " + e.getMessage());
+            throw new BusinessException(502, "AI 请求失败: " + describe(e));
         }
     }
 
@@ -322,6 +322,12 @@ public class AiClient {
             case "16:9", "横版" -> "16:9";
             default -> null;
         };
+    }
+
+    /** 异常描述:message 为 null(常见于超时/NPE)时带上异常类名,保证可诊断 */
+    static String describe(Exception e) {
+        String msg = e.getMessage();
+        return msg == null || msg.isBlank() ? e.getClass().getSimpleName() : msg;
     }
 
     private static String httpError(int status, String raw) {
