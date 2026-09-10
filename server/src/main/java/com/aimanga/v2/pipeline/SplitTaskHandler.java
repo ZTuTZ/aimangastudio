@@ -47,6 +47,7 @@ public class SplitTaskHandler implements TaskHandler {
     private final PromptService promptService;
     private final ObjectMapper objectMapper;
     private final com.aimanga.v2.service.ConfigService configService;
+    private final PipelineStageService stageService;
 
     @Override
     public String type() {
@@ -79,9 +80,22 @@ public class SplitTaskHandler implements TaskHandler {
         if (sourceText.isBlank()) {
             throw new BusinessException(400, "作品没有故事原文,无法拆话");
         }
+
+        // Phase 5.7 断点恢复:话已存在(上次 SPLIT 成功写入)且无页 → 跳过 AI,直接链式入队
+        if (!existing.isEmpty()) {
+            log.info("[split] 作品 {} 已有 {} 话(断点恢复),跳过 AI 拆话,直接链式入队",
+                    project.getId(), existing.size());
+            runtime.begin(1);
+            runtime.stepSuccess();
+            stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SPLIT);
+            chainNext(project, existing);
+            return;
+        }
+
         List<SourceUnit> units = SourceTextIndexer.index(sourceText);
         log.info("[split] 作品 {} 原文 {} 字 → {} 个 SourceUnit", project.getId(), sourceText.length(), units.size());
 
+        stageService.markRunning(project.getId(), PipelineStageService.STAGE_SPLIT);
         runtime.begin(3);
 
         // 1. 滚动小包规划(AI 只回边界,Java 按 offset 切片)
@@ -118,6 +132,7 @@ public class SplitTaskHandler implements TaskHandler {
                 ctx.enqueueUnique(project.getId(), chapter.getId(), ScriptTaskHandler.TYPE, "{}");
             }
         }
+        stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SPLIT);
         log.info("[split] 作品 {} 拆话完成: {} 话", project.getId(), chapters.size());
     }
 
@@ -187,6 +202,17 @@ public class SplitTaskHandler implements TaskHandler {
             return node.path("refreshMetadata").asBoolean(false);
         } catch (Exception e) {
             return false;
+        }
+    }
+
+    /** 链式入队下一阶段 */
+    private void chainNext(Project project, List<Chapter> chapters) {
+        if (ctx.feature("feature_auto_asset")) {
+            ctx.enqueueUnique(project.getId(), null, AssetTaskHandler.TYPE, "{}");
+        } else {
+            for (Chapter chapter : chapters) {
+                ctx.enqueueUnique(project.getId(), chapter.getId(), ScriptTaskHandler.TYPE, "{}");
+            }
         }
     }
 

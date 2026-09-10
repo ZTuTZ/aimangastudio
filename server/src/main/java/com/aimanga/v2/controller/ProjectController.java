@@ -8,7 +8,9 @@ import com.aimanga.v2.dto.PageResult;
 import com.aimanga.v2.dto.ProjectVO;
 import com.aimanga.v2.dto.TaskVO;
 import com.aimanga.v2.dto.UpdateProjectRequest;
+import com.aimanga.v2.model.PipelineStage;
 import com.aimanga.v2.model.Project;
+import com.aimanga.v2.pipeline.PipelineStageService;
 import com.aimanga.v2.service.ImportService;
 import com.aimanga.v2.service.ProjectService;
 import jakarta.validation.Valid;
@@ -34,6 +36,7 @@ public class ProjectController {
     private final ProjectService projectService;
     private final ImportService importService;
     private final com.aimanga.v2.service.TaskService taskService;
+    private final PipelineStageService stageService;
 
     @GetMapping
     public Result<PageResult<ProjectVO>> list(
@@ -88,6 +91,35 @@ public class ProjectController {
     public Result<TaskVO> rebuildAssets(@PathVariable Long id) {
         projectService.requireAccessible(id);
         return Result.ok(taskService.create(new CreateTaskRequest(id, null, "ASSET", null)));
+    }
+
+    /** 暂停项目的准备流水线(进行中阶段执行完当前步骤后暂停) */
+    @PostMapping("/{id}/pause")
+    public Result<Void> pause(@PathVariable Long id) {
+        projectService.requireAccessible(id);
+        stageService.pauseProject(id);
+        return Result.ok();
+    }
+
+    /** 继续项目的准备流水线 */
+    @PostMapping("/{id}/resume")
+    public Result<Void> resume(@PathVariable Long id) {
+        projectService.requireAccessible(id);
+        stageService.resumeProject(id);
+        // 重新入队下一个未完成阶段的任务
+        String nextStage = stageService.firstIncompleteStage(id);
+        if (nextStage != null) {
+            String taskType = nextStage.equals("SHEET") ? "SHEET" : nextStage;
+            taskService.createSystemTask(id, null, taskType, "{}");
+        }
+        return Result.ok();
+    }
+
+    /** 查询流水线各阶段进度 */
+    @GetMapping("/{id}/pipeline")
+    public Result<List<PipelineStage>> pipeline(@PathVariable Long id) {
+        projectService.requireAccessible(id);
+        return Result.ok(stageService.listByProject(id));
     }
 
     @PutMapping("/{id}")

@@ -34,6 +34,7 @@ public class SheetTaskHandler implements TaskHandler {
     private final PipelineContext ctx;
     private final AiService aiService;
     private final PromptService promptService;
+    private final PipelineStageService stageService;
 
     @Override
     public String type() {
@@ -58,8 +59,10 @@ public class SheetTaskHandler implements TaskHandler {
                     .eq(Asset::getAssetType, Asset.TYPE_CHARACTER)
                     .and(w -> w.isNull(Asset::getSheetImageUrl).or().eq(Asset::getSheetImageUrl, "")));
         }
+        stageService.markRunning(project.getId(), PipelineStageService.STAGE_SHEET);
         if (targets.isEmpty()) {
-            advanceProject(project);
+            stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SHEET);
+        advanceProject(project);
             return;
         }
 
@@ -98,6 +101,7 @@ public class SheetTaskHandler implements TaskHandler {
                 runtime.stepFail(e.getMessage());
             }
         }
+        stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SHEET);
         advanceProject(project);
     }
 

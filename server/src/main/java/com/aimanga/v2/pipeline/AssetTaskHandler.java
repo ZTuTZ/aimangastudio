@@ -47,6 +47,7 @@ public class AssetTaskHandler implements TaskHandler {
     private final PromptService promptService;
     private final AssetMergeService mergeService;
     private final ObjectMapper objectMapper;
+    private final PipelineStageService stageService;
 
     @Override
     public String type() {
@@ -73,6 +74,7 @@ public class AssetTaskHandler implements TaskHandler {
                         .eq(Asset::getAssetType, Asset.TYPE_CHARACTER))
                 .stream().map(Asset::getName).collect(Collectors.joining("、"));
 
+        stageService.markRunning(project.getId(), PipelineStageService.STAGE_ASSET);
         runtime.begin(packs.size() + 1);
 
         // 多包受控并发执行;单包独立重试;结果不立即写库
@@ -153,6 +155,7 @@ public class AssetTaskHandler implements TaskHandler {
         for (Chapter chapter : chapters) {
             ctx.enqueueUnique(project.getId(), chapter.getId(), ScriptTaskHandler.TYPE, "{}");
         }
+        stageService.markSuccess(project.getId(), PipelineStageService.STAGE_ASSET);
         log.info("[asset] 作品 {} 资产提取完成: {} 包,canonical {} 项(新增 {}/更新 {})",
                 project.getId(), packs.size(), canonical.size(), stats.inserted(), stats.updated());
     }

@@ -1,8 +1,11 @@
 package com.aimanga.v2.task;
 
+import com.aimanga.v2.model.PipelineStage;
 import com.aimanga.v2.model.TaskEntity;
+import com.aimanga.v2.pipeline.PipelineStageService;
 import com.aimanga.v2.repository.TaskMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -12,8 +15,10 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * 重启恢复:应用就绪后,把所有未完成任务(排队中/进行中/停止中)重置为排队中并重新入队。
- * 页级幂等与断点 current_no 保证不重复生成已完成内容。
+ * 重启恢复(Phase 5.7 增强):
+ * 1. 清除毒丸残留 + 重置信号量;
+ * 2. 查询 Pipeline Stage 确定恢复点 —— 已 SUCCESS 的阶段跳过;
+ * 3. 未完成任务重新入队。
  */
 @Slf4j
 @Component
@@ -23,20 +28,20 @@ public class TaskRecovery implements ApplicationRunner {
     private final TaskMapper taskMapper;
     private final TaskQueue taskQueue;
     private final com.aimanga.v2.task.RedisSemaphores semaphores;
+    private final PipelineStageService stageService;
 
     @Override
     public void run(ApplicationArguments args) {
-        // 1. 清除上次停机残留的毒丸(否则 Worker 被毒死,任务永远排队)
+        // 1. 清除毒丸
         taskQueue.purgePoison();
-        // 2. 重置并发信号量(启动瞬间无在跑任务,停机泄漏的许可此时清零最安全)
+        // 2. 重置信号量
         semaphores.resetAll();
-        // 3. 未完成任务重新入队
+        // 3. 未完成任务重新入队(保留 pipeline stage,Handler 内部根据已有数据跳过已完成步骤)
         List<TaskEntity> active = taskMapper.selectList(new LambdaQueryWrapper<TaskEntity>()
                 .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.STOPPING)
                 .orderByAsc(TaskEntity::getId));
         for (TaskEntity task : active) {
-            // 清执行锁/心跳(updateById 忽略 null,须用 UpdateWrapper 显式置空)
-            taskMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<TaskEntity>()
+            taskMapper.update(null, new LambdaUpdateWrapper<TaskEntity>()
                     .eq(TaskEntity::getId, task.getId())
                     .set(TaskEntity::getStatus, TaskStatus.PENDING)
                     .set(TaskEntity::getError, "")
@@ -45,7 +50,7 @@ public class TaskRecovery implements ApplicationRunner {
             taskQueue.enqueue(task.getId());
         }
         if (!active.isEmpty()) {
-            log.info("[task] 重启恢复:已重新入队 {} 个未完成任务", active.size());
+            log.info("[task] 重启恢复:已重新入队 {} 个未完成任务(已完成 Pipeline Stage 不会被重跑)", active.size());
         }
     }
 }

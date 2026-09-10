@@ -49,6 +49,7 @@ public class ScriptTaskHandler implements TaskHandler {
     private final PromptService promptService;
     private final AssetContextService assetContextService;
     private final ObjectMapper objectMapper;
+    private final PipelineStageService stageService;
 
     @Override
     public String type() {
@@ -148,6 +149,7 @@ public class ScriptTaskHandler implements TaskHandler {
         boolean allReady = ctx.chaptersOf(project.getId()).stream()
                 .allMatch(c -> c.getStatus() != null && c.getStatus() >= Chapter.STATUS_SCRIPT_READY);
         if (allReady) {
+            stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SCRIPT);
             if (ctx.feature("feature_auto_sheet")) {
                 ctx.enqueueUnique(project.getId(), null, SheetTaskHandler.TYPE, "{}");
             } else {
