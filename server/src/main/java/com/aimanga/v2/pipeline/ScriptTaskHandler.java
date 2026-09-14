@@ -49,7 +49,7 @@ public class ScriptTaskHandler implements TaskHandler {
     private final PromptService promptService;
     private final AssetContextService assetContextService;
     private final PipelineStageService stageService;
-    private final ImageStageRunner imageStageRunner;
+    private final ConcurrentStageRunner stageRunner;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -61,9 +61,9 @@ public class ScriptTaskHandler implements TaskHandler {
     public void run(TaskEntity task, TaskRuntime runtime) {
         Project project = ctx.project(task.getProjectId());
 
-        // 重跑支持:把上次终态失败的章节 Item 重新排队(成功的 Item 不受影响);回收崩溃残留的 RUNNING
+        // 重跑支持:把上次终态失败的章节 Item 重新排队(成功的 Item 不受影响);
+        // 孤儿 RUNNING 回收由 Runner 持锁执行(T5.11.4)
         stageService.resetFailedItems(project.getId(), PipelineStageService.STAGE_SCRIPT);
-        stageService.resetRunningItems(project.getId(), PipelineStageService.STAGE_SCRIPT);
 
         // 获取全部排队中的 SCRIPT Items(幂等:SUCCESS 的自动跳过)
         List<PipelineStageItem> items = stageService.getPendingItems(project.getId(), PipelineStageService.STAGE_SCRIPT);
@@ -83,11 +83,11 @@ public class ScriptTaskHandler implements TaskHandler {
         runtime.begin(items.size());
         stageService.markRunning(project.getId(), PipelineStageService.STAGE_SCRIPT);
 
-        // Phase 5.9 并发引擎:原子领取 + 单元失败重试 + 暂停/停止感知
-        imageStageRunner.run(project.getId(), PipelineStageService.STAGE_SCRIPT, runtime, item -> {
+        // Phase 5.9 并发引擎 + T5.11.6:SCRIPT 使用独立脚本 Worker 池,不再占用生图池
+        stageRunner.run(project.getId(), PipelineStageService.STAGE_SCRIPT, runtime, item -> {
             processOneChapter(project, item);
             return "{\"chapterId\":" + item.getBusinessId() + "}";
-        });
+        }, stageRunner.scriptEngine());
 
         // 暂停:阶段保持 PAUSED(pauseProject 已置),由恢复/继续重新入队
         if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_SCRIPT)) {

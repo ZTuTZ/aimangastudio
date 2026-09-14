@@ -106,16 +106,21 @@ public class ProjectController {
         return Result.ok();
     }
 
-    /** 继续项目的准备流水线 */
+    /**
+     * 继续项目(T5.11.5):恢复所有 PAUSED 阶段并逐阶段确保任务在跑。
+     * 主准备流水线(SPLIT/ASSET/SCRIPT)按顺序;手动素材阶段(SHEET/REFERENCE)独立恢复,
+     * 不能只靠 firstIncompleteStage 启动一个阶段(否则暂停的素材阶段会被遗漏)。
+     */
     @PostMapping("/{id}/resume")
     public Result<Void> resume(@PathVariable Long id) {
         projectService.requireAccessible(id);
+        List<String> pausedStages = stageService.pausedStageTypes(id);
         stageService.resumeProject(id);
-        // 重新入队下一个未完成阶段的任务
-        String nextStage = stageService.firstIncompleteStage(id);
-        if (nextStage != null) {
-            String taskType = nextStage.equals("SHEET") ? "SHEET" : nextStage;
-            taskService.createSystemTask(id, null, taskType, "{}");
+        for (String stage : pausedStages) {
+            // 阶段类型 → 任务类型映射(REFERENCE 阶段对应 ASSET_REF 任务)
+            String taskType = "REFERENCE".equals(stage) ? "ASSET_REF" : stage;
+            // enqueueUnique:已有活跃任务时静默跳过,不会产生第二个并行 Runner
+            taskService.enqueueUnique(id, null, taskType, "{}");
         }
         return Result.ok();
     }

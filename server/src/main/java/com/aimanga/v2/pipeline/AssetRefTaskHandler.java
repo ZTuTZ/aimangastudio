@@ -34,7 +34,7 @@ public class AssetRefTaskHandler implements TaskHandler {
 
     private final PipelineContext ctx;
     private final AiService aiService;
-    private final ImageStageRunner imageStageRunner;
+    private final ConcurrentStageRunner stageRunner;
     private final PipelineStageService stageService;
 
     @Override
@@ -53,7 +53,7 @@ public class AssetRefTaskHandler implements TaskHandler {
         } else {
             syncAllMissing(project);
         }
-        stageService.resetRunningItems(project.getId(), PipelineStageService.STAGE_REFERENCE);
+        // T5.11.4:孤儿 RUNNING 回收移入 Runner,仅在持有 project+stage 唯一执行锁时执行。
 
         PipelineStageService.StageItemStats before = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_REFERENCE);
         if (before.total() == 0 || before.pending() == 0) {
@@ -62,9 +62,8 @@ public class AssetRefTaskHandler implements TaskHandler {
         }
         runtime.begin((int) before.pending());
 
-        boolean forceRegen = !assetIds.isEmpty();
-        imageStageRunner.run(project.getId(), PipelineStageService.STAGE_REFERENCE, runtime,
-                item -> generateRef(project, item, forceRegen));
+        stageRunner.run(project.getId(), PipelineStageService.STAGE_REFERENCE, runtime,
+                item -> generateRef(project, item), stageRunner.imageEngine());
 
         if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_REFERENCE)) {
             log.info("[asset-ref] 作品 {} 素材参考图暂停中,等待继续", project.getId());
@@ -82,12 +81,13 @@ public class AssetRefTaskHandler implements TaskHandler {
     }
 
     /** 单资产处理器:参考图生成(§9 幂等:先存 OSS → 更新资产 URL → 才标 Item 成功) */
-    private String generateRef(Project project, PipelineStageItem item, boolean forceRegen) {
+    private String generateRef(Project project, PipelineStageItem item) {
         Asset asset = ctx.assetMapper.selectById(item.getBusinessId());
         if (asset == null) {
             throw new BusinessException(404, "资产不存在: " + item.getBusinessId());
         }
-        // 幂等(全量跑):已有参考图直接补标成功;手动选择时强制重画
+        // 幂等(全量跑):已有参考图直接补标成功;用户手动重生成(force 标记,T5.11.1)强制重画
+        boolean forceRegen = PipelineStageService.isForceRequested(item);
         if (!forceRegen && asset.getReferenceUrl() != null && !asset.getReferenceUrl().isBlank()) {
             return resultRef(asset.getId(), asset.getReferenceUrl());
         }
@@ -164,7 +164,7 @@ public class AssetRefTaskHandler implements TaskHandler {
                 throw new BusinessException(400, "参考图生成仅支持场景/道具/服装: " + asset.getName());
             }
             stageService.createItems(project.getId(), PipelineStageService.STAGE_REFERENCE, BUSINESS_TYPE_ASSET, List.of(assetId));
-            stageService.resetItemsByBusiness(project.getId(), PipelineStageService.STAGE_REFERENCE, BUSINESS_TYPE_ASSET, List.of(assetId));
+            stageService.forceResetItemsByBusiness(project.getId(), PipelineStageService.STAGE_REFERENCE, BUSINESS_TYPE_ASSET, List.of(assetId));
         }
     }
 

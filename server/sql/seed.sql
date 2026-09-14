@@ -50,7 +50,7 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_group`, `rema
 -- 功能开关
 ('feature_auto_split', '1', 'feature', '作品创建后自动拆话'),
 ('feature_auto_asset', '1', 'feature', '脚本完成后自动提取资产'),
-('feature_auto_sheet', '1', 'feature', '资产提取后自动生成角色设定表'),
+('feature_auto_sheet', '0', 'feature', '脚本完成后自动生成全部角色设定表(0=关闭,素材由用户在资产库勾选生成)'),
 -- OSS
 ('oss_access_key', '', 'oss', '阿里云 AccessKeyId(脱敏展示)'),
 ('oss_access_secret', '', 'oss', '阿里云 AccessKeySecret(脱敏展示)'),

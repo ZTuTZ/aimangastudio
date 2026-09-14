@@ -1,46 +1,61 @@
 package com.aimanga.v2.pipeline;
 
+import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.service.ConfigService;
 import com.aimanga.v2.task.TaskRuntime;
 import com.aimanga.v2.task.TaskStopSignal;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 并发生图引擎(Phase 5.9):Stage Item Pool → Worker Thread Pool → AI Image API。
+ * 通用阶段并发引擎(Phase 5.9 并发生图引擎,T5.11.6 基类化):Stage Item Pool → Worker Thread Pool → AI API。
  *
  * 架构:Pipeline 仍只有一个 Stage(不拆 200 个 Task),并发单元是 Stage Item,
- * 由本引擎按并发上限(image_generation_concurrency,热更新)把 PENDING Item 喂给生图 Worker 池。
+ * 由本引擎按并发上限(热更新)把 PENDING Item 喂给指定 Worker 池。
  *
  * - 原子领取(§5):UPDATE...WHERE status=PENDING,影响行数=1 才执行,杜绝同一页重复生成;
  * - 失败重试(§6):单 Item 失败 → retry_count+1 → 回到 PENDING 重新执行,超过 max_retry 终态失败,不影响其他 Item;
  * - 暂停支持(§7):阶段 PAUSED 时不再领取新 Item,已领取的等待返回并保存结果;
  * - 重启恢复(§8):启动时回收孤儿 RUNNING Item(SUCCESS 跳过、PENDING 重新执行);
- *   进程崩溃的检测由任务层 claim_token+心跳+看门狗完成,恢复后 Handler 重跑本引擎;
  * - 幂等顺序(§9):处理器内部先保存 OSS → 更新业务 URL → 才标 Item SUCCESS;
- * - 进度统计(§10):每个 Item 终态后刷新 Stage 的 total/success/failed/progress。
+ * - 进度统计(§10):每个 Item 终态后刷新 Stage 的 total/success/failed/progress;
+ * - 执行互斥(T5.11.3/T5.11.4):同一 project+stage 同时只允许一个活跃 Runner(Redisson RLock),
+ *   resetRunningItems 仅在持有锁时执行,不会回收其他存活 Runner 的在跑 Item。
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
-public class ImageStageRunner {
+public class ConcurrentStageRunner {
 
     private static final long POLL_INTERVAL_MS = 500;
     private static final long DRAIN_TIMEOUT_MS = 15 * 60 * 1000;
     private static final int FEED_BATCH = 64;
 
     private final PipelineStageService stageService;
-    private final ImageWorkerPool workerPool;
+    private final ImageWorkerPool imageWorkerPool;
+    private final ScriptWorkerPool scriptWorkerPool;
     private final ConfigService configService;
+    private final RedissonClient redissonClient;
+
+    public ConcurrentStageRunner(PipelineStageService stageService, ImageWorkerPool imageWorkerPool,
+                                 ScriptWorkerPool scriptWorkerPool, ConfigService configService,
+                                 RedissonClient redissonClient) {
+        this.stageService = stageService;
+        this.imageWorkerPool = imageWorkerPool;
+        this.scriptWorkerPool = scriptWorkerPool;
+        this.configService = configService;
+        this.redissonClient = redissonClient;
+    }
 
     /** 单 Item 处理器:输入 Item,输出结果引用 JSON;抛异常触发重试/终态失败 */
     @FunctionalInterface
@@ -48,17 +63,55 @@ public class ImageStageRunner {
         String process(PipelineStageItem item) throws Exception;
     }
 
+    /**
+     * 执行引擎规格:决定用哪个 Worker 池、并发与重试配置键(T5.11.6)。
+     * 生图阶段用 imageEngine(),脚本阶段用 scriptEngine(),互不占用资源。
+     */
+    public record StageEngine(AbstractStageWorkerPool pool, String concurrencyKey, int concurrencyDefault,
+                              int concurrencyMax, String retryKey, int retryDefault) {}
+
+    public StageEngine imageEngine() {
+        return new StageEngine(imageWorkerPool, "image_generation_concurrency", 5, 32, "image_gen_max_retry", 3);
+    }
+
+    public StageEngine scriptEngine() {
+        return new StageEngine(scriptWorkerPool, "script_item_concurrency", 5, 32, "script_gen_max_retry", 3);
+    }
+
     /** 引擎执行结果 */
     public record StageRunResult(int success, int failed, int retried, boolean paused) {}
 
-    public StageRunResult run(Long projectId, String stageType, TaskRuntime runtime, StageItemProcessor processor) {
+    public StageRunResult run(Long projectId, String stageType, TaskRuntime runtime, StageItemProcessor processor,
+                              StageEngine engine) {
+        // T5.11.3/T5.11.4:同一 project+stage 同时只允许一个活跃 Runner。
+        // leaseTime=-1 → Redisson 看门狗自动续期,进程死亡后锁自动释放,重启恢复可接管。
+        RLock stageLock = redissonClient.getLock("aimanga:v2:stage-run:" + projectId + ":" + stageType);
+        try {
+            if (!stageLock.tryLock(0, -1, TimeUnit.SECONDS)) {
+                throw new BusinessException(409, "该作品「" + stageType + "」阶段已有生成任务在执行中,请等待完成后再发起");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException(409, "该作品「" + stageType + "」阶段已有生成任务在执行中,请等待完成后再发起");
+        }
+        try {
+            return runLocked(projectId, stageType, runtime, processor, engine);
+        } finally {
+            stageLock.unlock();
+        }
+    }
+
+    /** 持有阶段执行锁后的主流程 */
+    private StageRunResult runLocked(Long projectId, String stageType, TaskRuntime runtime,
+                                     StageItemProcessor processor, StageEngine engine) {
         // 吸取配置热更新(外部改库/配置中心保存后,下一次执行即生效)
-        workerPool.refresh();
-        int concurrency = currentConcurrency();
-        int maxRetry = Math.max(0, Math.min(10, configService.getInt("image_gen_max_retry", 3)));
+        engine.pool().refresh();
+        int concurrency = Math.max(1, Math.min(engine.concurrencyMax(),
+                configService.getInt(engine.concurrencyKey(), engine.concurrencyDefault())));
+        int maxRetry = Math.max(0, Math.min(10, configService.getInt(engine.retryKey(), engine.retryDefault())));
 
         // §8 重启恢复:回收孤儿 RUNNING(上次进程崩溃/被杀的残留)。
-        // 任务层 claim_token 保证同一阶段任务同时只有一个 Runner,启动时重置是安全的。
+        // 此刻已持有 project+stage 唯一执行锁(T5.11.4):不存在其他存活 Runner,重置安全。
         int recovered = stageService.resetRunningItems(projectId, stageType);
         if (recovered > 0) {
             log.warn("[stage] {} {} 回收 {} 个孤儿 RUNNING Item → 重新排队", projectId, stageType, recovered);
@@ -72,7 +125,7 @@ public class ImageStageRunner {
         AtomicBoolean paused = new AtomicBoolean(false);
         AtomicBoolean stopped = new AtomicBoolean(false);
 
-        log.info("[stage] {} {} 并发生图开始: 并发={}, maxRetry={}", projectId, stageType, concurrency, maxRetry);
+        log.info("[stage] {} {} 并发执行开始: 并发={}, maxRetry={}", projectId, stageType, concurrency, maxRetry);
 
         // 主循环:领 Item → 喂池子 → 等待,直至无可领取且无在跑 / 暂停 / 停止
         while (true) {
@@ -94,7 +147,7 @@ public class ImageStageRunner {
                 }
                 inFlight.incrementAndGet();
                 try {
-                    workerPool.submit(() -> {
+                    engine.pool().submit(() -> {
                         try {
                             processItem(projectId, stageType, runtime, processor, item, maxRetry,
                                     claimed, inFlight, success, failed, retried, paused, stopped);
@@ -126,7 +179,7 @@ public class ImageStageRunner {
             throw new TaskStopSignal();
         }
         StageRunResult result = new StageRunResult(success.get(), failed.get(), retried.get(), paused.get());
-        log.info("[stage] {} {} 并发生图结束: 成功={} 失败={} 重试={} 暂停={}",
+        log.info("[stage] {} {} 并发执行结束: 成功={} 失败={} 重试={} 暂停={}",
                 projectId, stageType, result.success(), result.failed(), result.retried(), result.paused());
         return result;
     }
@@ -200,10 +253,6 @@ public class ImageStageRunner {
             }
             sleep(300);
         }
-    }
-
-    private int currentConcurrency() {
-        return Math.max(1, Math.min(32, configService.getInt("image_generation_concurrency", 5)));
     }
 
     private void sleep(long millis) {

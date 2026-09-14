@@ -26,6 +26,7 @@ public class AssetController {
 
     private final AssetService assetService;
     private final TaskService taskService;
+    private final com.aimanga.v2.pipeline.MaterialGenerationService materialGenerationService;
 
     @GetMapping("/projects/{projectId}/assets")
     public Result<List<AssetVO>> listByProject(@PathVariable Long projectId) {
@@ -59,40 +60,12 @@ public class AssetController {
 
     /**
      * 批量生成勾选资产的素材图:角色→六姿势设定表(SHEET 任务),场景/道具/服装→参考图(ASSET_REF 任务)。
-     * 混选时按类型拆成多个任务,返回创建的任务列表。
+     * 逻辑统一在 MaterialGenerationService(T5.11.3):校验归属 → 落 Items → 复用/创建唯一活跃任务。
      */
     @PostMapping("/projects/{projectId}/assets/generate")
     public Result<List<com.aimanga.v2.dto.TaskVO>> generateBatch(@PathVariable Long projectId,
                                                                  @RequestBody BatchAssetRequest request) {
-        if (request.assetIds() == null || request.assetIds().isEmpty()) {
-            throw new com.aimanga.v2.common.BusinessException(400, "请先勾选要生成的资产");
-        }
-        List<Long> characterIds = new java.util.ArrayList<>();
-        List<Long> refIds = new java.util.ArrayList<>();
-        for (Long assetId : request.assetIds()) {
-            Asset asset = assetService.requireAccessible(assetId);
-            if (!asset.getProjectId().equals(projectId)) {
-                throw new com.aimanga.v2.common.BusinessException(404, "资产不存在: " + assetId);
-            }
-            if (asset.getAssetType() != null && asset.getAssetType() == Asset.TYPE_CHARACTER) {
-                characterIds.add(assetId);
-            } else {
-                refIds.add(assetId);
-            }
-        }
-        if (characterIds.isEmpty() && refIds.isEmpty()) {
-            throw new com.aimanga.v2.common.BusinessException(400, "请先勾选要生成的资产");
-        }
-        List<com.aimanga.v2.dto.TaskVO> tasks = new java.util.ArrayList<>();
-        if (!characterIds.isEmpty()) {
-            tasks.add(taskService.create(new com.aimanga.v2.dto.CreateTaskRequest(
-                    projectId, null, "SHEET", batchPayload(characterIds))));
-        }
-        if (!refIds.isEmpty()) {
-            tasks.add(taskService.create(new com.aimanga.v2.dto.CreateTaskRequest(
-                    projectId, null, "ASSET_REF", batchPayload(refIds))));
-        }
-        return Result.ok(tasks);
+        return Result.ok(materialGenerationService.requestMaterials(projectId, request.assetIds()));
     }
 
     private static com.fasterxml.jackson.databind.JsonNode batchPayload(List<Long> assetIds) {

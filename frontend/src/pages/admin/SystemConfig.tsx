@@ -69,17 +69,18 @@ const GROUPS: GroupDef[] = [
     fields: [
       { key: 'task_max_concurrency', label: '全局并行任务数(Worker)', type: 'number' },
       { key: 'task_user_concurrency', label: '每用户并行任务数', type: 'number' },
-      { key: 'task_page_concurrency', label: '单任务页级并发', type: 'number' },
       { key: 'storyboard_page_count', label: '脚本默认页数', type: 'number' },
     ],
   },
   {
-    key: 'image_engine',
-    title: '生图引擎(Phase 5.9 并发生图)',
+    key: 'stage_pools',
+    title: '阶段并发池(Phase 5.11,热更新)',
     fields: [
-      { key: 'image_generation_concurrency', label: '生图并发数(热更新,1-32)', type: 'number' },
+      { key: 'script_item_concurrency', label: '脚本阶段并发数(1-32)', type: 'number' },
+      { key: 'script_queue_size', label: '脚本池队列容量(重启生效)', type: 'number' },
+      { key: 'image_generation_concurrency', label: '生图阶段并发数(1-32)', type: 'number' },
       { key: 'image_gen_max_retry', label: '单图失败重试次数', type: 'number' },
-      { key: 'image_queue_size', label: '线程池队列容量(重启生效)', type: 'number' },
+      { key: 'image_queue_size', label: '生图池队列容量(重启生效)', type: 'number' },
     ],
   },
   {

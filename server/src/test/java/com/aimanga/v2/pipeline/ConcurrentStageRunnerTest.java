@@ -1,17 +1,21 @@
 package com.aimanga.v2.pipeline;
 
+import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.service.ConfigService;
 import com.aimanga.v2.task.TaskRuntime;
 import com.aimanga.v2.task.TaskStopSignal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -24,10 +28,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Phase 5.9 并发生图引擎单元测试:
- * 并发上限 / 单元失败重试 / 重试耗尽终态失败 / 暂停不领取 / 停止传播。
+ * Phase 5.9 并发阶段引擎(Phase 5.11 更名 ConcurrentStageRunner)单元测试:
+ * 并发上限 / 单元失败重试 / 重试耗尽终态失败 / 暂停不领取 / 停止传播 / 执行互斥锁。
  */
-class ImageStageRunnerTest {
+class ConcurrentStageRunnerTest {
 
     private static final Long PROJECT_ID = 100L;
     private static final String STAGE = "SHEET";
@@ -35,11 +39,11 @@ class ImageStageRunnerTest {
     private PipelineStageService stageService;
     private ConfigService configService;
     private TaskRuntime runtime;
-    private ImageStageRunner runner;
+    private ConcurrentStageRunner runner;
     private ImageWorkerPool workerPool;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         stageService = mock(PipelineStageService.class);
         configService = mock(ConfigService.class);
         runtime = mock(TaskRuntime.class);
@@ -47,9 +51,19 @@ class ImageStageRunnerTest {
         when(configService.getInt(eq("image_generation_concurrency"), anyInt())).thenReturn(2);
         when(configService.getInt(eq("image_gen_max_retry"), anyInt())).thenReturn(1);
         when(configService.getInt(eq("image_queue_size"), anyInt())).thenReturn(50);
+        when(configService.getInt(eq("script_item_concurrency"), anyInt())).thenReturn(2);
+        when(configService.getInt(eq("script_gen_max_retry"), anyInt())).thenReturn(1);
+        when(configService.getInt(eq("script_queue_size"), anyInt())).thenReturn(50);
         workerPool = new ImageWorkerPool(configService);
         workerPool.init();
-        runner = new ImageStageRunner(stageService, workerPool, configService);
+        ScriptWorkerPool scriptPool = new ScriptWorkerPool(configService);
+        scriptPool.init();
+        // 执行互斥锁 mock:永远可获取(T5.11.3 专测单独覆盖)
+        RedissonClient redisson = mock(RedissonClient.class);
+        RLock lock = mock(RLock.class);
+        when(lock.tryLock(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(), any())).thenReturn(true);
+        when(redisson.getLock(anyString())).thenReturn(lock);
+        runner = new ConcurrentStageRunner(stageService, workerPool, scriptPool, configService, redisson);
 
         when(stageService.isStagePaused(eq(PROJECT_ID), eq(STAGE))).thenReturn(false);
         when(stageService.resetRunningItems(PROJECT_ID, STAGE)).thenReturn(0);
@@ -78,13 +92,13 @@ class ImageStageRunnerTest {
 
         AtomicInteger active = new AtomicInteger();
         AtomicInteger maxActive = new AtomicInteger();
-        ImageStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, runtime, it -> {
+        ConcurrentStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, runtime, it -> {
             int now = active.incrementAndGet();
             maxActive.accumulateAndGet(now, Math::max);
             Thread.sleep(200);
             active.decrementAndGet();
             return "{}";
-        });
+        }, runner.imageEngine());
 
         assertThat(maxActive.get()).isLessThanOrEqualTo(2);
         assertThat(result.success()).isEqualTo(5);
@@ -100,12 +114,12 @@ class ImageStageRunnerTest {
         when(stageService.getItem(1L)).thenReturn(item(1L, 11L, 0), item(1L, 11L, 1));
 
         AtomicInteger attempts = new AtomicInteger();
-        ImageStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, runtime, it -> {
+        ConcurrentStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, runtime, it -> {
             if (attempts.incrementAndGet() == 1) {
                 throw new RuntimeException("模型未返回图片");
             }
             return "{\"assetId\":11}";
-        });
+        }, runner.imageEngine());
 
         assertThat(attempts.get()).isEqualTo(2);
         verify(stageService).markItemRetry(eq(1L), contains("模型未返回图片"));
@@ -123,10 +137,10 @@ class ImageStageRunnerTest {
         when(stageService.getItem(1L)).thenReturn(item(1L, 11L, 0), item(1L, 11L, 1));
 
         AtomicInteger attempts = new AtomicInteger();
-        ImageStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, runtime, it -> {
+        ConcurrentStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, runtime, it -> {
             attempts.incrementAndGet();
             throw new RuntimeException("通道超时");
-        });
+        }, runner.imageEngine());
 
         assertThat(attempts.get()).isEqualTo(2);
         verify(stageService).markItemRetry(eq(1L), anyString());
@@ -140,7 +154,7 @@ class ImageStageRunnerTest {
     void stagePaused_claimsNothing() {
         when(stageService.isStagePaused(PROJECT_ID, STAGE)).thenReturn(true);
 
-        ImageStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, runtime, it -> "{}");
+        ConcurrentStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, runtime, it -> "{}", runner.imageEngine());
 
         assertThat(result.paused()).isTrue();
         verify(stageService, never()).getPendingItemIds(anyLong(), anyString(), anyInt());
@@ -151,7 +165,7 @@ class ImageStageRunnerTest {
     void userStop_propagatesStopSignal() {
         org.mockito.Mockito.doThrow(new TaskStopSignal()).when(runtime).checkStop();
 
-        assertThatThrownBy(() -> runner.run(PROJECT_ID, STAGE, runtime, it -> "{}"))
+        assertThatThrownBy(() -> runner.run(PROJECT_ID, STAGE, runtime, it -> "{}", runner.imageEngine()))
                 .isInstanceOf(TaskStopSignal.class);
         verify(stageService, never()).claimItem(anyLong());
     }
@@ -161,7 +175,7 @@ class ImageStageRunnerTest {
         when(stageService.resetRunningItems(PROJECT_ID, STAGE)).thenReturn(3);
         when(stageService.getPendingItemIds(PROJECT_ID, STAGE, 64)).thenReturn(List.of());
 
-        runner.run(PROJECT_ID, STAGE, runtime, it -> "{}");
+        runner.run(PROJECT_ID, STAGE, runtime, it -> "{}", runner.imageEngine());
 
         verify(stageService).resetRunningItems(PROJECT_ID, STAGE);
     }
@@ -175,10 +189,28 @@ class ImageStageRunnerTest {
         // 第 1 次(主循环喂 Item 前)放行,第 2 次起(Worker 内)抛停止信号
         org.mockito.Mockito.doNothing().doThrow(new TaskStopSignal()).when(runtime).checkStop();
 
-        assertThatThrownBy(() -> runner.run(PROJECT_ID, STAGE, runtime, it -> "{}"))
+        assertThatThrownBy(() -> runner.run(PROJECT_ID, STAGE, runtime, it -> "{}", runner.imageEngine()))
                 .isInstanceOf(TaskStopSignal.class);
 
         verify(stageService, atLeastOnce()).releaseItem(1L);
         verify(stageService, never()).markItemSuccess(anyLong(), anyString());
+    }
+
+    @Test
+    void concurrentRunnerOnSameStage_rejectedByMutex() throws Exception {
+        // T5.11.3:同一 project+stage 第二个 Runner 抢不到执行锁 → 409,不回收任何 Item
+        RedissonClient redisson = mock(RedissonClient.class);
+        RLock lock = mock(RLock.class);
+        when(lock.tryLock(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(), any())).thenReturn(false);
+        when(redisson.getLock(anyString())).thenReturn(lock);
+        ScriptWorkerPool scriptPool = new ScriptWorkerPool(configService);
+        scriptPool.init();
+        ConcurrentStageRunner second = new ConcurrentStageRunner(stageService, workerPool, scriptPool, configService, redisson);
+
+        assertThatThrownBy(() -> second.run(PROJECT_ID, STAGE, runtime, it -> "{}", second.imageEngine()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已有生成任务在执行中");
+        verify(stageService, never()).resetRunningItems(anyLong(), anyString());
+        verify(stageService, never()).claimItem(anyLong());
     }
 }

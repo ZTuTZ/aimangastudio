@@ -36,7 +36,7 @@ public class SheetTaskHandler implements TaskHandler {
 
     private final PipelineContext ctx;
     private final AiService aiService;
-    private final ImageStageRunner imageStageRunner;
+    private final ConcurrentStageRunner stageRunner;
     private final PipelineStageService stageService;
 
     @Override
@@ -51,13 +51,15 @@ public class SheetTaskHandler implements TaskHandler {
         stageService.markRunning(project.getId(), PipelineStageService.STAGE_SHEET);
 
         if (!assetIds.isEmpty()) {
-            // 指定角色(批量勾选/单角色手动重生成):只处理这些,forceRegen 强制重画
+            // 指定角色(批量勾选/单角色手动重生成):只处理这些。
+            // T5.11.1:手动生成必须用 forceReset(SUCCESS 也重置 + force 标记),
+            // MaterialGenerationService 已先落过一次,这里幂等兜底(兼容旧路径/直接重试)。
             syncSelectedAssets(project, assetIds);
         } else {
             syncAllAssets(project);
         }
-        // 回收上次进程崩溃残留的 RUNNING Item(与 Runner 内部回收幂等)
-        stageService.resetRunningItems(project.getId(), PipelineStageService.STAGE_SHEET);
+        // T5.11.4:不再在 Handler 里无条件回收 RUNNING——孤儿回收移入 Runner,
+        // 且仅在持有 project+stage 唯一执行锁时执行,不会误回收其他存活 Runner 的在跑 Item。
 
         PipelineStageService.StageItemStats before = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_SHEET);
         if (before.total() == 0 || before.pending() == 0) {
@@ -66,13 +68,11 @@ public class SheetTaskHandler implements TaskHandler {
             advanceProject(project);
             return;
         }
-        // 任务进度 = 本次要处理的数量(排队 + 失败重置,不含已完成/成功跳过的)
+        // 任务进度 = 本次要处理的数量(pending 统计含孤儿 RUNNING,Runner 回收后会照常处理)
         runtime.begin((int) before.pending());
 
-        // 手动选择:强制重画;全量跑:幂等跳过已完成的
-        boolean forceRegen = !assetIds.isEmpty();
-        imageStageRunner.run(project.getId(), PipelineStageService.STAGE_SHEET, runtime,
-                item -> generateSheet(project, item, forceRegen));
+        stageRunner.run(project.getId(), PipelineStageService.STAGE_SHEET, runtime,
+                item -> generateSheet(project, item), stageRunner.imageEngine());
 
         // 暂停:阶段保持 PAUSED(pauseProject 已置),由恢复/继续重新入队
         if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_SHEET)) {
@@ -93,13 +93,14 @@ public class SheetTaskHandler implements TaskHandler {
     }
 
     /** 单个 Item 处理器:角色设定表生成(§9 幂等:先存 OSS → 更新资产 URL → 才标 Item 成功) */
-    private String generateSheet(Project project, PipelineStageItem item, boolean forceRegen) {
+    private String generateSheet(Project project, PipelineStageItem item) {
         Asset asset = ctx.assetMapper.selectById(item.getBusinessId());
         if (asset == null) {
             throw new BusinessException(404, "资产不存在: " + item.getBusinessId());
         }
         // 幂等(全量跑):上次进程在"保存 URL 之后、标成功之前"崩溃 → 已有图直接补标成功,不重复生图。
-        // 手动重生成(forceRegen)不受此限制,必须重画。
+        // 用户手动重生成(forceReset 写入的 force 标记)不受此限制,必须重画。
+        boolean forceRegen = PipelineStageService.isForceRequested(item);
         if (!forceRegen && asset.getSheetImageUrl() != null && !asset.getSheetImageUrl().isBlank()) {
             return resultRef(asset.getId(), asset.getSheetImageUrl());
         }
@@ -152,7 +153,7 @@ public class SheetTaskHandler implements TaskHandler {
         }
     }
 
-    /** 手动重生成指定角色(批量):只重置这些角色的 Item,不影响其他失败单元 */
+    /** 手动重生成指定角色(批量):强制重置这些角色的 Item(T5.11.1,SUCCESS 也重置),不影响其他单元 */
     private void syncSelectedAssets(Project project, List<Long> assetIds) {
         for (Long assetId : assetIds) {
             Asset asset = ctx.assetMapper.selectById(assetId);
@@ -160,7 +161,7 @@ public class SheetTaskHandler implements TaskHandler {
                 throw new BusinessException(404, "资产不存在: " + assetId);
             }
             stageService.createItems(project.getId(), PipelineStageService.STAGE_SHEET, BUSINESS_TYPE_ASSET, List.of(assetId));
-            stageService.resetItemsByBusiness(project.getId(), PipelineStageService.STAGE_SHEET, BUSINESS_TYPE_ASSET, List.of(assetId));
+            stageService.forceResetItemsByBusiness(project.getId(), PipelineStageService.STAGE_SHEET, BUSINESS_TYPE_ASSET, List.of(assetId));
         }
     }
 

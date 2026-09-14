@@ -4,21 +4,21 @@ import com.aimanga.v2.service.ConfigService;
 import org.springframework.stereotype.Component;
 
 /**
- * 生图 Worker 池(Phase 5.9 §3/§4,T5.11.6 基类化):
- * 并发 = image_generation_concurrency(默认 5,热更新),队列 = image_queue_size(默认 50)。
- * 该池是全局的:所有作品的 SHEET/ASSET_REF/LAYOUT/IMAGE 等生图阶段共享同一并发上限,
- * 与 ai_image_concurrency(层④)叠加限流。
+ * 脚本 Worker 池(Phase 5.11 T5.11.6):
+ * 并发 = script_item_concurrency(默认 5,热更新),队列 = script_queue_size(默认 50)。
+ * SCRIPT 文本 AI 请求使用独立线程池,不再占用生图 Worker 池;
+ * 最终仍受 ai_text_concurrency(Redis 信号量,层④)保护。
  */
 @Component
-public class ImageWorkerPool extends AbstractStageWorkerPool {
+public class ScriptWorkerPool extends AbstractStageWorkerPool {
 
-    public ImageWorkerPool(ConfigService configService) {
+    public ScriptWorkerPool(ConfigService configService) {
         super(configService);
     }
 
     @Override
     protected String concurrencyKey() {
-        return "image_generation_concurrency";
+        return "script_item_concurrency";
     }
 
     @Override
@@ -33,7 +33,7 @@ public class ImageWorkerPool extends AbstractStageWorkerPool {
 
     @Override
     protected String queueSizeKey() {
-        return "image_queue_size";
+        return "script_queue_size";
     }
 
     @Override
@@ -43,6 +43,6 @@ public class ImageWorkerPool extends AbstractStageWorkerPool {
 
     @Override
     protected String threadNamePrefix() {
-        return "image-gen";
+        return "script-gen";
     }
 }

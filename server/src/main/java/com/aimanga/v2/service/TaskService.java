@@ -259,6 +259,43 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         }
     }
 
+    /**
+     * 确保同 (project, chapter, type) 只有一个活跃任务并返回它(Phase 5.11 T5.11.3)。
+     * 已有 PENDING/RUNNING/STOPPING 任务 → 直接复用(不再创建第二个并行 Runner,
+     * 用户新勾选的 Items 已在创建前落库,活跃 Runner 会自动领取);
+     * 没有则创建新任务。Redisson 短锁内查询+创建,连续快速点击不会产生重复任务。
+     */
+    public TaskVO ensureUniqueActiveTask(Long projectId, Long chapterId, String type, String payloadJson) {
+        String lockKey = "aimanga:v2:enqueue:" + projectId + ":" + (chapterId == null ? 0 : chapterId) + ":" + type;
+        org.redisson.api.RLock lock = redissonClient.getLock(lockKey);
+        try {
+            if (!lock.tryLock(0, 10, java.util.concurrent.TimeUnit.SECONDS)) {
+                throw new BusinessException(409, "任务正在创建中,请稍候重试");
+            }
+            try {
+                TaskEntity active = baseMapper.selectOne(new LambdaQueryWrapper<TaskEntity>()
+                        .eq(TaskEntity::getProjectId, projectId)
+                        .eq(chapterId != null, TaskEntity::getChapterId, chapterId)
+                        .isNull(chapterId == null, TaskEntity::getChapterId)
+                        .eq(TaskEntity::getTaskType, type)
+                        .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.STOPPING)
+                        .orderByDesc(TaskEntity::getId)
+                        .last("LIMIT 1"));
+                if (active != null) {
+                    log.info("[task] 复用活跃任务 type={} id={} projectId={}", type, active.getId(), projectId);
+                    return toVO(active);
+                }
+                TaskEntity created = createSystemTask(projectId, chapterId, type, payloadJson);
+                return toVO(created);
+            } finally {
+                lock.unlock();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException(409, "任务正在创建中,请稍候重试");
+        }
+    }
+
     private Long extractPageId(com.fasterxml.jackson.databind.JsonNode payload) {
         if (payload == null) {
             return null;

@@ -105,6 +105,17 @@ public class PipelineStageService {
                 .set(PipelineStage::getUpdateTime, LocalDateTime.now()));
     }
 
+    /** 查询当前处于暂停状态的所有阶段类型(T5.11.5:resume 时逐阶段恢复任务) */
+    public List<String> pausedStageTypes(Long projectId) {
+        return stageMapper.selectList(new LambdaQueryWrapper<PipelineStage>()
+                        .eq(PipelineStage::getProjectId, projectId)
+                        .eq(PipelineStage::getStatus, PipelineStage.STATUS_PAUSED))
+                .stream()
+                .map(PipelineStage::getStageType)
+                .distinct()
+                .toList();
+    }
+
     /** 继续项目的暂停阶段(重置为排队,由恢复/链式入队重新启动) */
     public void resumeProject(Long projectId) {
         stageMapper.update(null, new LambdaUpdateWrapper<PipelineStage>()
@@ -247,20 +258,48 @@ public class PipelineStageService {
                 .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING));
     }
 
+    /**
+     * 强制重置(Phase 5.11 T5.11.1):用户点击「生成/重新生成」时使用。
+     * 与 resetItemsByBusiness 的区别:SUCCESS 也会被重置(否则已有素材的资产点重生成不会触发新生成),
+     * 并清空 retry_count/result_ref/error_message,从零开始。
+     * result_ref 写入 {"force":true} 标记,处理器据此跳过幂等检查强制重画。
+     * 普通失败续跑请使用 resetFailedItems,不得混用。
+     */
+    public int forceResetItemsByBusiness(Long projectId, String stageType, String businessType, List<Long> businessIds) {
+        if (businessIds == null || businessIds.isEmpty()) {
+            return 0;
+        }
+        return itemMapper.update(null, new LambdaUpdateWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getProjectId, projectId)
+                .eq(PipelineStageItem::getStageType, stageType)
+                .eq(PipelineStageItem::getBusinessType, businessType)
+                .in(PipelineStageItem::getBusinessId, businessIds)
+                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING)
+                .set(PipelineStageItem::getRetryCount, 0)
+                .set(PipelineStageItem::getResultRef, "{\"force\":true}")
+                .set(PipelineStageItem::getErrorMessage, ""));
+    }
+
+    /** 判断 Item 是否被用户强制要求重生成(forceResetItemsByBusiness 写入的标记) */
+    public static boolean isForceRequested(PipelineStageItem item) {
+        return item.getResultRef() != null && item.getResultRef().contains("\"force\":true");
+    }
+
     /** 清理孤儿 Items(业务单元已删除,如角色被手动移除),避免永久失败的僵尸 Item 卡住阶段 */
     public int removeOrphanItems(Long projectId, String stageType, String businessType, List<Long> validBusinessIds) {
         List<PipelineStageItem> items = itemMapper.selectList(new LambdaQueryWrapper<PipelineStageItem>()
                 .eq(PipelineStageItem::getProjectId, projectId)
                 .eq(PipelineStageItem::getStageType, stageType)
                 .eq(PipelineStageItem::getBusinessType, businessType));
-        List<Long> orphans = items.stream()
-                .map(PipelineStageItem::getBusinessId)
-                .filter(id -> !validBusinessIds.contains(id))
+        // T5.11.2:必须按 Stage Item 主键(id)删除;business_id 是业务主键,不能混作 item 主键
+        List<Long> orphanItemIds = items.stream()
+                .filter(item -> !validBusinessIds.contains(item.getBusinessId()))
+                .map(PipelineStageItem::getId)
                 .toList();
-        if (orphans.isEmpty()) {
+        if (orphanItemIds.isEmpty()) {
             return 0;
         }
-        return itemMapper.deleteBatchIds(orphans);
+        return itemMapper.deleteBatchIds(orphanItemIds);
     }
 
     /**
