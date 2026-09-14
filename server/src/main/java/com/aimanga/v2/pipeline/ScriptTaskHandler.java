@@ -6,6 +6,7 @@ import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.Asset;
 import com.aimanga.v2.model.Chapter;
 import com.aimanga.v2.model.PageEntity;
+import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.model.Project;
 import com.aimanga.v2.model.TaskEntity;
 import com.aimanga.v2.pipeline.StoryScript.CharacterItem;
@@ -13,6 +14,7 @@ import com.aimanga.v2.pipeline.StoryScript.DialogueItem;
 import com.aimanga.v2.pipeline.text.SourceTextIndexer;
 import com.aimanga.v2.pipeline.text.SourceUnit;
 import com.aimanga.v2.task.TaskHandler;
+import com.aimanga.v2.task.TaskStopSignal;
 import com.aimanga.v2.task.TaskRuntime;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -26,16 +28,19 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
- * SCRIPT 六段式脚本任务(Phase 5.5 版,每话一个):
+ * SCRIPT 六段式脚本任务(Phase 5.8 Stage Item 版):
+ * 一个 SCRIPT Task 处理项目内全部 PENDING Stage Items(每话一个 Item)。
+ * - 有控并发(task_page_concurrency),幂等跳过 SUCCESS Items;
  * - 注入全书标准资产上下文({assets}),禁止重新设计已有角色;
- * - 本话原文按 SourceUnit 编号,每页携带 sourceStartUnit/sourceEndUnit;
- * - 页级 Source Spine 硬校验:第1页从 U0001 起、连续覆盖到最后 Unit、无 gap/overlap/倒序;
- * - speaker 合法集 = 全局角色 name+aliases + 本话新角色;未知说话人并入旁白;
- * - upsert 角色按 canonical name/aliases 命中,只补缺失字段,绝不覆盖非空人工值;
- * - 全部话就绪 → enqueueUnique SHEET(feature_auto_sheet)或直接推进作品「待出图」。
+ * - 页级 Source Spine 校验 + 程序侧修复;
+ * - speaker 合法集 = 全局角色 name+aliases + 本话新角色,未知说话人并入旁白;
+ * - 全部 Item 完成 → markSuccess(SCRIPT) → 链式 SHEET 或推进「待出图」。
  */
 @Slf4j
 @Component
@@ -48,8 +53,8 @@ public class ScriptTaskHandler implements TaskHandler {
     private final AiService aiService;
     private final PromptService promptService;
     private final AssetContextService assetContextService;
-    private final ObjectMapper objectMapper;
     private final PipelineStageService stageService;
+    private final ObjectMapper objectMapper;
 
     @Override
     public String type() {
@@ -58,20 +63,91 @@ public class ScriptTaskHandler implements TaskHandler {
 
     @Override
     public void run(TaskEntity task, TaskRuntime runtime) {
-        if (task.getChapterId() == null) {
-            throw new BusinessException(400, "SCRIPT 任务缺少 chapterId");
+        Project project = ctx.project(task.getProjectId());
+
+        // 获取全部排队中的 SCRIPT Items(幂等:SUCCESS 的自动跳过)
+        List<PipelineStageItem> items = stageService.getPendingItems(project.getId(), PipelineStageService.STAGE_SCRIPT);
+        if (items.isEmpty()) {
+            // 无排队 Item → 检查是否有 Item 存在(可能是恢复后全部已完成)
+            long total = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_SCRIPT).total();
+            if (total > 0) {
+                log.info("[script] 作品 {} SCRIPT 全部 Item 已完成,跳过", project.getId());
+                stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SCRIPT);
+                chainAfterScript(project);
+                return;
+            }
+            throw new BusinessException(400, "SCRIPT 阶段没有待处理的 Items(请先完成拆话)");
         }
-        Chapter chapter = ctx.chapterMapper.selectById(task.getChapterId());
+
+        int concurrency = Math.max(1, ctx.configService.getInt("task_page_concurrency", 5));
+        log.info("[script] 作品 {} SCRIPT 开始: {} 个 Items,并发 {}", project.getId(), items.size(), concurrency);
+        runtime.begin(items.size());
+        stageService.markRunning(project.getId(), PipelineStageService.STAGE_SCRIPT);
+
+        // 有控并发处理 Items
+        ExecutorService pool = Executors.newFixedThreadPool(Math.min(concurrency, items.size()));
+        try {
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
+            for (PipelineStageItem item : items) {
+                futures.add(CompletableFuture.runAsync(() -> {
+                    try {
+                        runtime.checkStop();
+                        // 暂停感知
+                        if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_SCRIPT)) {
+                            return; // 暂停中,不处理新 Item
+                        }
+                        stageService.markItemRunning(item.getId());
+                        processOneChapter(project, item);
+                        stageService.markItemSuccess(item.getId());
+                        runtime.stepSuccess();
+                    } catch (TaskStopSignal s) {
+                        throw s;
+                    } catch (Exception e) {
+                        log.warn("[script] Item {} 处理失败: {}", item.getId(), e.getMessage());
+                        stageService.markItemFailed(item.getId(), e.getMessage());
+                        runtime.stepFail(e.getMessage());
+                    }
+                }, pool));
+            }
+            try {
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            } catch (CompletionException ce) {
+                Throwable cause = ce.getCause() == null ? ce : ce.getCause();
+                if (cause instanceof TaskStopSignal signal) throw signal;
+                throw new BusinessException(502, "SCRIPT 批量处理失败: " + cause.getMessage());
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // 全部 Item 处理完成 → 标记 SCRIPT Stage SUCCESS → 链式下一阶段
+        stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SCRIPT);
+        chainAfterScript(project);
+        log.info("[script] 作品 {} SCRIPT 完成: {}/{} 成功", project.getId(),
+                runtime.successCount(), items.size());
+    }
+
+    /** 处理单个章节 Item(生成脚本 + 写页 + upsert 角色) */
+    private void processOneChapter(Project project, PipelineStageItem item) {
+        Long chapterId = item.getBusinessId();
+        Chapter chapter = ctx.chapterMapper.selectById(chapterId);
         if (chapter == null) {
-            throw new BusinessException(404, "话不存在: " + task.getChapterId());
+            throw new BusinessException(404, "话不存在: " + chapterId);
         }
-        Project project = ctx.project(chapter.getProjectId());
-        String text = ctx.chapterText(project, chapter);
+
+        // 幂等:已就绪则跳过
+        if (chapter.getStatus() != null && chapter.getStatus() >= Chapter.STATUS_SCRIPT_READY) {
+            log.info("[script] 话 {} 已就绪,跳过", chapterId);
+            return;
+        }
+
+        Project p = ctx.project(chapter.getProjectId());
+        String text = ctx.chapterText(p, chapter);
         if (text.isBlank()) {
             throw new BusinessException(400, "本话没有故事原文,无法生成脚本");
         }
 
-        // 本话原文 SourceUnit 索引 + 页数自适应
+        // SourceUnit 索引 + 页数自适应
         List<SourceUnit> units = SourceTextIndexer.index(text);
         int unitCount = units.size();
         String numbered = SourceTextIndexer.toNumberedText(units, 0, unitCount);
@@ -83,83 +159,52 @@ public class ScriptTaskHandler implements TaskHandler {
                 : pageTarget;
         actualPages = Math.min(actualPages, pageTarget);
 
-        String assetsContext = assetContextService.buildScriptAssetContext(project, chapter);
-        String style = ctx.stylePromptOf(project);
+        String assetsContext = assetContextService.buildScriptAssetContext(p, chapter);
+        String style = ctx.stylePromptOf(p);
 
-        runtime.begin(3);
         String prompt = promptService.render("prompt_script", PipelinePrompts.DEFAULT_STORYBOARD, Map.of(
                 "assets", assetsContext,
                 "page_count", String.valueOf(actualPages),
                 "style", style,
                 "text", numbered));
-        StoryScript script = executeWithRetry(prompt, unitCount, project.getId());
-        runtime.stepSuccess();
+        StoryScript script = executeWithRetry(prompt, unitCount, p.getId());
 
-        // 写页(重建该话全部页;SourceUnit 仅作校验锚点,不入库)
-        List<PageEntity> existing = ctx.pageMapper.selectList(new LambdaQueryWrapper<PageEntity>()
-                .eq(PageEntity::getChapterId, chapter.getId()));
-        for (PageEntity page : existing) {
-            ctx.pageMapper.deleteById(page.getId());
-        }
-        List<StoryScript.PageItem> pages = script.pages();
-        for (int i = 0; i < pages.size(); i++) {
-            StoryScript.PageItem item = pages.get(i);
-            PageEntity page = new PageEntity();
-            page.setProjectId(project.getId());
-            page.setChapterId(chapter.getId());
-            page.setPageNo(i + 1);
-            page.setNarration(PipelineUtils.stripPunctuation(item.narration()));
-            String dialogueJson;
-            try {
-                List<DialogueItem> normalized = new ArrayList<>();
-                if (item.dialogue() != null) {
-                    for (DialogueItem d : item.dialogue()) {
-                        normalized.add(new DialogueItem(PipelineUtils.safe(d.speaker()).trim(),
-                                PipelineUtils.stripPunctuation(d.line())));
-                    }
-                }
-                dialogueJson = objectMapper.writeValueAsString(normalized);
-            } catch (Exception e) {
-                dialogueJson = "[]";
-            }
-            page.setDialogue(dialogueJson);
-            page.setVisual(item.visual());
-            page.setSceneDescription(PipelineUtils.composeSceneDescription(
-                    PipelineUtils.stripPunctuation(item.narration()), item.dialogue(), item.visual()));
-            page.setGenerateStatus(PageEntity.GEN_PENDING);
-            page.setGenerateRecords("[]");
-            page.setCreateTime(LocalDateTime.now());
-            ctx.pageMapper.insert(page);
-        }
-        runtime.stepSuccess();
+        // 写页(重建该话全部页)
+        writePages(p.getId(), chapter.getId(), script);
 
-        // 角色 upsert(全局资产 canonical 优先,alias 命中不建第二卡)
-        upsertCharacters(project.getId(), script);
-        runtime.stepSuccess();
+        // 角色 upsert
+        upsertCharacters(p.getId(), script);
 
         // 话状态 → 脚本就绪
         Chapter chapterPatch = new Chapter();
         chapterPatch.setId(chapter.getId());
         chapterPatch.setStatus(Chapter.STATUS_SCRIPT_READY);
-        chapterPatch.setPageCount(pages.size());
+        chapterPatch.setPageCount(script.pages().size());
         chapterPatch.setUpdateTime(LocalDateTime.now());
         ctx.chapterMapper.updateById(chapterPatch);
-
-        // 全部话就绪 → SHEET(去重)或直接推进「待出图」
-        boolean allReady = ctx.chaptersOf(project.getId()).stream()
-                .allMatch(c -> c.getStatus() != null && c.getStatus() >= Chapter.STATUS_SCRIPT_READY);
-        if (allReady) {
-            stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SCRIPT);
-            if (ctx.feature("feature_auto_sheet")) {
-                ctx.enqueueUnique(project.getId(), null, SheetTaskHandler.TYPE, "{}");
-            } else {
-                advanceProjectIfPreparing(project.getId());
-            }
-        }
-        log.info("[script] 话 {} 脚本完成: {} 页(实际目标 {}),Source Spine 校验通过", chapter.getId(), pages.size(), actualPages);
     }
 
-    /** AI 生成 + 契约校验(非空/无空页/页级 Source Spine),失败自动重试 1 次 */
+    /** 链式:SCRIPT 完成 → SHEET 或推进「待出图」 */
+    private void chainAfterScript(Project project) {
+        if (ctx.feature("feature_auto_sheet")) {
+            ctx.enqueueUnique(project.getId(), null, SheetTaskHandler.TYPE, "{}");
+        } else {
+            advanceProjectIfPreparing(project.getId());
+        }
+    }
+
+    private void advanceProjectIfPreparing(Long projectId) {
+        Project project = ctx.project(projectId);
+        if (project.getStatus() != null && project.getStatus() == Project.STATUS_PREPARING) {
+            Project patch = new Project();
+            patch.setId(projectId);
+            patch.setStatus(Project.STATUS_READY);
+            patch.setUpdateTime(LocalDateTime.now());
+            ctx.projectMapper.updateById(patch);
+        }
+    }
+
+    /** AI 生成 + 契约校验 + 程序修复,失败自动重试 1 次 */
     private StoryScript executeWithRetry(String prompt, int unitCount, Long projectId) {
         BusinessException last = null;
         for (int attempt = 0; attempt < 2; attempt++) {
@@ -170,11 +215,9 @@ public class ScriptTaskHandler implements TaskHandler {
                 last = e;
                 continue;
             }
-            // 程序侧修复:AI 定切点,Java 强制页区间连续对齐(首页 U0001、消除缺口、末页覆盖末 Unit)
-            StoryScript repaired = repairSpine(script, unitCount);
-            List<String> problems = validate(repaired, unitCount);
+            List<String> problems = validate(script, unitCount);
             if (problems.isEmpty()) {
-                return normalize(repaired, globalSpeakers(projectId));
+                return normalize(repairSpine(script, unitCount), globalSpeakers(projectId));
             }
             last = new BusinessException(502, "脚本不符合契约: " + String.join("; ", problems));
         }
@@ -203,7 +246,7 @@ public class ScriptTaskHandler implements TaskHandler {
         return problems;
     }
 
-    /** 页级 Source Spine 硬校验(Phase 5.5 T5.5.7) */
+    /** 页级 Source Spine 硬校验 */
     static List<String> validateSpine(List<StoryScript.PageItem> pages, int unitCount) {
         List<String> problems = new ArrayList<>();
         for (StoryScript.PageItem item : pages) {
@@ -231,19 +274,11 @@ public class ScriptTaskHandler implements TaskHandler {
         return problems;
     }
 
-    /**
-     * 页区间程序修复:AI 负责切点,程序负责覆盖完整性(确定性事实):
-     * 按 sourceStartUnit 排序 → 首页强制 U0001 → 消除页间缺口/重叠 → 末页强制覆盖到最后 Unit。
-     * 无法修复(区间重叠且无法对齐)时返回原样,由校验失败触发重试。
-     */
+    /** 页区间程序修复:AI 定切点,Java 强制对齐连续区间 */
     static StoryScript repairSpine(StoryScript script, int unitCount) {
-        if (script.pages() == null || script.pages().isEmpty()) {
-            return script;
-        }
+        if (script.pages() == null || script.pages().isEmpty()) return script;
         for (StoryScript.PageItem item : script.pages()) {
-            if (item.sourceStartUnit() == null || item.sourceEndUnit() == null) {
-                return script; // 缺锚点不可修复
-            }
+            if (item.sourceStartUnit() == null || item.sourceEndUnit() == null) return script;
         }
         List<StoryScript.PageItem> sorted = new ArrayList<>(script.pages());
         sorted.sort(java.util.Comparator.comparingInt(StoryScript.PageItem::sourceStartUnit));
@@ -253,20 +288,12 @@ public class ScriptTaskHandler implements TaskHandler {
             StoryScript.PageItem item = sorted.get(i);
             int start = i == 0 ? 1 : expected;
             int end = Math.max(item.sourceEndUnit(), start);
-            if (i == sorted.size() - 1) {
-                end = Math.max(end, unitCount); // 末页必须覆盖到最后
-            }
-            if (end > unitCount) {
-                end = unitCount;
-            }
-            if (start > end) {
-                return script; // 重叠到无法对齐,交给重试
-            }
-            repaired.add(new StoryScript.PageItem(item.page(), start, end,
-                    item.narration(), item.dialogue(), item.visual()));
+            if (i == sorted.size() - 1) end = Math.max(end, unitCount);
+            if (end > unitCount) end = unitCount;
+            if (start > end) return script;
+            repaired.add(new StoryScript.PageItem(item.page(), start, end, item.narration(), item.dialogue(), item.visual()));
             expected = end + 1;
         }
-        // 末页若仍未到 unitCount(排除了末页强制的场景),由最后一段补齐
         if (repaired.get(repaired.size() - 1).sourceEndUnit() != unitCount) {
             StoryScript.PageItem lastItem = repaired.get(repaired.size() - 1);
             repaired.set(repaired.size() - 1, new StoryScript.PageItem(lastItem.page(),
@@ -314,19 +341,54 @@ public class ScriptTaskHandler implements TaskHandler {
                 script.characters(), pages, script.tagline());
     }
 
-    /** 角色 upsert:canonical name/aliases 命中不建第二卡;只补缺失字段,不覆盖非空值 */
-    private void upsertCharacters(Long projectId, StoryScript script) {
-        if (script.characters() == null) {
-            return;
+    /** 写页(重建该话全部页) */
+    private void writePages(Long projectId, Long chapterId, StoryScript script) {
+        List<PageEntity> existing = ctx.pageMapper.selectList(new LambdaQueryWrapper<PageEntity>()
+                .eq(PageEntity::getChapterId, chapterId));
+        for (PageEntity page : existing) {
+            ctx.pageMapper.deleteById(page.getId());
         }
+        List<StoryScript.PageItem> pages = script.pages();
+        for (int i = 0; i < pages.size(); i++) {
+            StoryScript.PageItem item = pages.get(i);
+            PageEntity page = new PageEntity();
+            page.setProjectId(projectId);
+            page.setChapterId(chapterId);
+            page.setPageNo(i + 1);
+            page.setNarration(PipelineUtils.stripPunctuation(item.narration()));
+            String dialogueJson;
+            try {
+                List<DialogueItem> normalized = new ArrayList<>();
+                if (item.dialogue() != null) {
+                    for (DialogueItem d : item.dialogue()) {
+                        normalized.add(new DialogueItem(PipelineUtils.safe(d.speaker()).trim(),
+                                PipelineUtils.stripPunctuation(d.line())));
+                    }
+                }
+                dialogueJson = objectMapper.writeValueAsString(normalized);
+            } catch (Exception e) {
+                dialogueJson = "[]";
+            }
+            page.setDialogue(dialogueJson);
+            page.setVisual(item.visual());
+            page.setSceneDescription(PipelineUtils.composeSceneDescription(
+                    PipelineUtils.stripPunctuation(item.narration()), item.dialogue(), item.visual()));
+            page.setGenerateStatus(PageEntity.GEN_PENDING);
+            page.setGenerateRecords("[]");
+            page.setCreateTime(LocalDateTime.now());
+            ctx.pageMapper.insert(page);
+        }
+    }
+
+    /** 角色 upsert(canonical name/aliases 命中不建第二卡;只补缺失字段) */
+    private void upsertCharacters(Long projectId, StoryScript script) {
+        if (script.characters() == null) return;
         List<Asset> existingCharacters = ctx.assetMapper.selectList(new LambdaQueryWrapper<Asset>()
                 .eq(Asset::getProjectId, projectId)
                 .eq(Asset::getAssetType, Asset.TYPE_CHARACTER));
         for (CharacterItem c : script.characters()) {
             String name = notBlank(c.name()) ? c.name().trim() : (notBlank(c.role()) ? c.role().trim() : "");
-            if (name.isBlank()) {
-                continue;
-            }
+            if (name.isBlank()) continue;
             String structured = writeStructured(c);
             String description = PipelineUtils.buildCharacterDescription(c);
             Asset existing = null;
@@ -336,10 +398,7 @@ public class ScriptTaskHandler implements TaskHandler {
                         || aliases.stream().anyMatch(a -> a.equalsIgnoreCase(name))
                         || (notBlank(c.role()) && (asset.getName().equalsIgnoreCase(c.role().trim())
                             || aliases.stream().anyMatch(a -> a.equalsIgnoreCase(c.role().trim()))));
-                if (hit) {
-                    existing = asset;
-                    break;
-                }
+                if (hit) { existing = asset; break; }
             }
             if (existing != null) {
                 Asset patch = new Asset();
@@ -368,34 +427,19 @@ public class ScriptTaskHandler implements TaskHandler {
         }
     }
 
-    private void advanceProjectIfPreparing(Long projectId) {
-        Project project = ctx.project(projectId);
-        if (project.getStatus() != null && project.getStatus() == Project.STATUS_PREPARING) {
-            Project patch = new Project();
-            patch.setId(projectId);
-            patch.setStatus(Project.STATUS_READY);
-            patch.setUpdateTime(LocalDateTime.now());
-            ctx.projectMapper.updateById(patch);
-        }
-    }
-
     private String writeStructured(CharacterItem c) {
         try {
             return objectMapper.writeValueAsString(new com.aimanga.v2.pipeline.AssetExtractResult.Structured(
                     PipelineUtils.safe(c.role()), PipelineUtils.safe(c.age()), PipelineUtils.safe(c.hair()),
                     PipelineUtils.safe(c.accessories()), PipelineUtils.safe(c.top()), PipelineUtils.safe(c.bottom())));
-        } catch (Exception e) {
-            return "{}";
-        }
+        } catch (Exception e) { return "{}"; }
     }
 
     private String writeAliases(String role) {
         try {
             List<String> aliases = notBlank(role) ? List.of(role.trim()) : List.of();
             return objectMapper.writeValueAsString(aliases);
-        } catch (Exception e) {
-            return "[]";
-        }
+        } catch (Exception e) { return "[]"; }
     }
 
     private List<String> parseAliases(String json) {
@@ -404,21 +448,12 @@ public class ScriptTaskHandler implements TaskHandler {
                     json == null || json.isBlank() ? "[]" : json);
             List<String> list = new ArrayList<>();
             if (node.isArray()) {
-                node.forEach(n -> {
-                    if (n.isTextual() && !n.asText().isBlank()) list.add(n.asText());
-                });
+                node.forEach(n -> { if (n.isTextual() && !n.asText().isBlank()) list.add(n.asText()); });
             }
             return list;
-        } catch (Exception e) {
-            return new ArrayList<>();
-        }
+        } catch (Exception e) { return new ArrayList<>(); }
     }
 
-    private static boolean blank(String s) {
-        return s == null || s.isBlank();
-    }
-
-    private static boolean notBlank(String s) {
-        return !blank(s);
-    }
+    private static boolean blank(String s) { return s == null || s.isBlank(); }
+    private static boolean notBlank(String s) { return !blank(s); }
 }

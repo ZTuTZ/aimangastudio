@@ -128,9 +128,10 @@ public class SplitTaskHandler implements TaskHandler {
         if (ctx.feature("feature_auto_asset")) {
             ctx.enqueueUnique(project.getId(), null, AssetTaskHandler.TYPE, "{}");
         } else {
-            for (Chapter chapter : chapters) {
-                ctx.enqueueUnique(project.getId(), chapter.getId(), ScriptTaskHandler.TYPE, "{}");
-            }
+            // Phase 5.8:直接创建 SCRIPT Items(跳过 ASSET)
+            List<Long> chapterIds = chapters.stream().map(Chapter::getId).toList();
+            stageService.createItems(project.getId(), PipelineStageService.STAGE_SCRIPT, "CHAPTER", chapterIds);
+            ctx.enqueueUnique(project.getId(), null, ScriptTaskHandler.TYPE, "{}");
         }
         stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SPLIT);
         log.info("[split] 作品 {} 拆话完成: {} 话", project.getId(), chapters.size());
@@ -210,9 +211,10 @@ public class SplitTaskHandler implements TaskHandler {
         if (ctx.feature("feature_auto_asset")) {
             ctx.enqueueUnique(project.getId(), null, AssetTaskHandler.TYPE, "{}");
         } else {
-            for (Chapter chapter : chapters) {
-                ctx.enqueueUnique(project.getId(), chapter.getId(), ScriptTaskHandler.TYPE, "{}");
-            }
+            // Phase 5.8:直接创建 SCRIPT Items(跳过 ASSET)
+            List<Long> chapterIds = chapters.stream().map(Chapter::getId).toList();
+            stageService.createItems(project.getId(), PipelineStageService.STAGE_SCRIPT, "CHAPTER", chapterIds);
+            ctx.enqueueUnique(project.getId(), null, ScriptTaskHandler.TYPE, "{}");
         }
     }
 

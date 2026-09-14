@@ -151,10 +151,10 @@ public class AssetTaskHandler implements TaskHandler {
         }
         ctx.taskMapper.updateById(patch);
 
-        // 链式入队:为所有话入队 SCRIPT(SHEET 待全部脚本就绪后执行)
-        for (Chapter chapter : chapters) {
-            ctx.enqueueUnique(project.getId(), chapter.getId(), ScriptTaskHandler.TYPE, "{}");
-        }
+        // Phase 5.8:创建 SCRIPT Stage Items(每话一个执行单元),入队单个 SCRIPT Task 批量处理
+        List<Long> chapterIds = chapters.stream().map(Chapter::getId).toList();
+        stageService.createItems(project.getId(), PipelineStageService.STAGE_SCRIPT, "CHAPTER", chapterIds);
+        ctx.enqueueUnique(project.getId(), null, ScriptTaskHandler.TYPE, "{}");
         stageService.markSuccess(project.getId(), PipelineStageService.STAGE_ASSET);
         log.info("[asset] 作品 {} 资产提取完成: {} 包,canonical {} 项(新增 {}/更新 {})",
                 project.getId(), packs.size(), canonical.size(), stats.inserted(), stats.updated());

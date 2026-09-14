@@ -1,7 +1,9 @@
 package com.aimanga.v2.pipeline;
 
 import com.aimanga.v2.model.PipelineStage;
+import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.repository.PipelineStageMapper;
+import com.aimanga.v2.repository.PipelineStageItemMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +34,7 @@ public class PipelineStageService {
     public static final String STAGE_EXPORT = "EXPORT";
 
     private final PipelineStageMapper stageMapper;
+    private final PipelineStageItemMapper itemMapper;
 
     /** 标记阶段开始(UPSERT:不存在则创建,存在则更新为进行中) */
     public void markRunning(Long projectId, String stageType) {
@@ -134,5 +137,82 @@ public class PipelineStageService {
             stageMapper.insert(stage);
         }
         return stage;
+    }
+
+    // ---- Stage Item 管理(Phase 5.8) ----
+
+    /** 创建阶段 Items(幂等:已存在的 business_id 跳过) */
+    public void createItems(Long projectId, String stageType, String businessType, List<Long> businessIds) {
+        for (Long bizId : businessIds) {
+            Long exists = itemMapper.selectCount(new LambdaQueryWrapper<PipelineStageItem>()
+                    .eq(PipelineStageItem::getProjectId, projectId)
+                    .eq(PipelineStageItem::getStageType, stageType)
+                    .eq(PipelineStageItem::getBusinessType, businessType)
+                    .eq(PipelineStageItem::getBusinessId, bizId));
+            if (exists != null && exists > 0) continue;
+            PipelineStageItem item = new PipelineStageItem();
+            item.setProjectId(projectId);
+            item.setStageType(stageType);
+            item.setBusinessType(businessType);
+            item.setBusinessId(bizId);
+            item.setStatus(PipelineStageItem.STATUS_PENDING);
+            item.setRetryCount(0);
+            item.setCreateTime(LocalDateTime.now());
+            itemMapper.insert(item);
+        }
+    }
+
+    /** 查询指定阶段的所有排队中 Items */
+    public List<PipelineStageItem> getPendingItems(Long projectId, String stageType) {
+        return itemMapper.selectList(new LambdaQueryWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getProjectId, projectId)
+                .eq(PipelineStageItem::getStageType, stageType)
+                .eq(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING)
+                .orderByAsc(PipelineStageItem::getBusinessId));
+    }
+
+    /** 标记 Item 进行中 */
+    public void markItemRunning(Long itemId) {
+        itemMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getId, itemId)
+                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_RUNNING));
+    }
+
+    /** 标记 Item 成功 */
+    public void markItemSuccess(Long itemId) {
+        itemMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getId, itemId)
+                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_SUCCESS));
+    }
+
+    /** 标记 Item 失败 */
+    public void markItemFailed(Long itemId, String error) {
+        itemMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getId, itemId)
+                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_FAILED)
+                .set(PipelineStageItem::getErrorMessage, error == null ? "" : error.substring(0, Math.min(error.length(), 512))));
+    }
+
+    /** 判断阶段全部 Item 是否都成功 */
+    public boolean allItemsSuccess(Long projectId, String stageType) {
+        Long pending = itemMapper.selectCount(new LambdaQueryWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getProjectId, projectId)
+                .eq(PipelineStageItem::getStageType, stageType)
+                .ne(PipelineStageItem::getStatus, PipelineStageItem.STATUS_SUCCESS));
+        return pending == null || pending == 0;
+    }
+
+    /** 查询阶段 Item 统计 */
+    public record StageItemStats(long total, long success, long failed, long pending) {}
+
+    public StageItemStats getItemStats(Long projectId, String stageType) {
+        List<PipelineStageItem> items = itemMapper.selectList(new LambdaQueryWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getProjectId, projectId)
+                .eq(PipelineStageItem::getStageType, stageType));
+        long total = items.size();
+        long success = items.stream().filter(i -> i.getStatus() == PipelineStageItem.STATUS_SUCCESS).count();
+        long failed = items.stream().filter(i -> i.getStatus() == PipelineStageItem.STATUS_FAILED).count();
+        long pending = total - success - failed;
+        return new StageItemStats(total, success, failed, pending);
     }
 }

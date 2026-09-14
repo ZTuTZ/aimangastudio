@@ -165,3 +165,21 @@ CREATE TABLE IF NOT EXISTS `style_preset` (
   PRIMARY KEY (`id`),
   KEY `idx_preset_status_sort` (`status`, `sort`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='风格预设';
+
+-- 流水线阶段执行单元(Phase 5.8:SCRIPT 等阶段内部的章节/页级断点)
+CREATE TABLE IF NOT EXISTS `pipeline_stage_item` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `project_id` BIGINT UNSIGNED NOT NULL,
+  `stage_type` VARCHAR(32) NOT NULL COMMENT 'SPLIT/ASSET/SCRIPT/SHEET/LAYOUT/IMAGE/EXPORT',
+  `business_type` VARCHAR(32) NOT NULL COMMENT '业务类型:CHAPTER/PAGE',
+  `business_id` BIGINT UNSIGNED NOT NULL COMMENT '业务主键(chapter.id/page.id/asset.id)',
+  `status` TINYINT NOT NULL DEFAULT 0 COMMENT '0排队 1进行中 2成功 3失败',
+  `retry_count` INT NOT NULL DEFAULT 0,
+  `result_ref` JSON COMMENT '结果引用(如 assetId/pageUrl)',
+  `error_message` VARCHAR(512) DEFAULT '',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_item` (`project_id`, `stage_type`, `business_type`, `business_id`),
+  KEY `idx_item_status` (`project_id`, `stage_type`, `status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='流水线阶段执行单元';
