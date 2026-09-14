@@ -29,6 +29,7 @@ public class PipelineStageService {
     public static final String STAGE_ASSET = "ASSET";
     public static final String STAGE_SCRIPT = "SCRIPT";
     public static final String STAGE_SHEET = "SHEET";
+    public static final String STAGE_REFERENCE = "REFERENCE";
     public static final String STAGE_LAYOUT = "LAYOUT";
     public static final String STAGE_IMAGE = "IMAGE";
     public static final String STAGE_EXPORT = "EXPORT";
@@ -113,15 +114,31 @@ public class PipelineStageService {
                 .set(PipelineStage::getUpdateTime, LocalDateTime.now()));
     }
 
-    /** 查找第一个未成功的阶段类型(恢复入口),全部成功返回 null */
+    /**
+     * 查找第一个未完成的阶段类型(恢复入口),全部成功返回 null。
+     * SHEET(素材生成)已改为用户按需触发:阶段从未开始过(无记录)时不视为未完成,
+     * 避免「继续流水线」把用户没有发起过的素材生成自动跑起来。
+     */
     public String firstIncompleteStage(Long projectId) {
         String[] order = {STAGE_SPLIT, STAGE_ASSET, STAGE_SCRIPT, STAGE_SHEET};
         for (String stageType : order) {
-            if (!isStageSuccess(projectId, stageType)) {
-                return stageType;
+            if (isStageSuccess(projectId, stageType)) {
+                continue;
             }
+            if (STAGE_SHEET.equals(stageType) && !stageExists(projectId, stageType)) {
+                continue;
+            }
+            return stageType;
         }
         return null;
+    }
+
+    /** 阶段记录是否存在(从未 markRunning/markSuccess 过的阶段视为未开始) */
+    public boolean stageExists(Long projectId, String stageType) {
+        Long count = stageMapper.selectCount(new LambdaQueryWrapper<PipelineStage>()
+                .eq(PipelineStage::getProjectId, projectId)
+                .eq(PipelineStage::getStageType, stageType));
+        return count != null && count > 0;
     }
 
     private PipelineStage getOrCreate(Long projectId, String stageType) {

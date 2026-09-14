@@ -164,9 +164,10 @@ public class ScriptTaskHandler implements TaskHandler {
         ctx.chapterMapper.updateById(chapterPatch);
     }
 
-    /** 链式:SCRIPT 完成 → SHEET 或推进「待出图」 */
+    /** 链式:SCRIPT 完成 → 推进「待出图」;仅 feature_auto_sheet=1 时自动生成设定表(默认关闭,素材由用户在资产库勾选生成) */
     private void chainAfterScript(Project project) {
-        if (ctx.feature("feature_auto_sheet")) {
+        boolean autoSheet = ctx.configService.getInt("feature_auto_sheet", 0) == 1;
+        if (autoSheet) {
             ctx.enqueueUnique(project.getId(), null, SheetTaskHandler.TYPE, "{}");
         } else {
             advanceProjectIfPreparing(project.getId());

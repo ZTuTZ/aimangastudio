@@ -47,11 +47,12 @@ public class SheetTaskHandler implements TaskHandler {
     @Override
     public void run(TaskEntity task, TaskRuntime runtime) {
         Project project = ctx.project(task.getProjectId());
-        Long assetId = parseAssetId(task.getPayload());
+        List<Long> assetIds = parseAssetIds(task.getPayload());
         stageService.markRunning(project.getId(), PipelineStageService.STAGE_SHEET);
 
-        if (assetId != null) {
-            syncSingleAsset(project, assetId);
+        if (!assetIds.isEmpty()) {
+            // 指定角色(批量勾选/单角色手动重生成):只处理这些,forceRegen 强制重画
+            syncSelectedAssets(project, assetIds);
         } else {
             syncAllAssets(project);
         }
@@ -68,8 +69,8 @@ public class SheetTaskHandler implements TaskHandler {
         // 任务进度 = 本次要处理的数量(排队 + 失败重置,不含已完成/成功跳过的)
         runtime.begin((int) before.pending());
 
-        // 手动重生成:强制重画;全量跑:幂等跳过已完成的
-        boolean forceRegen = assetId != null;
+        // 手动选择:强制重画;全量跑:幂等跳过已完成的
+        boolean forceRegen = !assetIds.isEmpty();
         imageStageRunner.run(project.getId(), PipelineStageService.STAGE_SHEET, runtime,
                 item -> generateSheet(project, item, forceRegen));
 
@@ -151,14 +152,16 @@ public class SheetTaskHandler implements TaskHandler {
         }
     }
 
-    /** 手动重生成单个角色:只重置该角色的 Item,不影响其他失败单元 */
-    private void syncSingleAsset(Project project, Long assetId) {
-        Asset asset = ctx.assetMapper.selectById(assetId);
-        if (asset == null || !asset.getProjectId().equals(project.getId())) {
-            throw new BusinessException(404, "资产不存在: " + assetId);
+    /** 手动重生成指定角色(批量):只重置这些角色的 Item,不影响其他失败单元 */
+    private void syncSelectedAssets(Project project, List<Long> assetIds) {
+        for (Long assetId : assetIds) {
+            Asset asset = ctx.assetMapper.selectById(assetId);
+            if (asset == null || !asset.getProjectId().equals(project.getId())) {
+                throw new BusinessException(404, "资产不存在: " + assetId);
+            }
+            stageService.createItems(project.getId(), PipelineStageService.STAGE_SHEET, BUSINESS_TYPE_ASSET, List.of(assetId));
+            stageService.resetItemsByBusiness(project.getId(), PipelineStageService.STAGE_SHEET, BUSINESS_TYPE_ASSET, List.of(assetId));
         }
-        stageService.createItems(project.getId(), PipelineStageService.STAGE_SHEET, BUSINESS_TYPE_ASSET, List.of(assetId));
-        stageService.resetItemsByBusiness(project.getId(), PipelineStageService.STAGE_SHEET, BUSINESS_TYPE_ASSET, List.of(assetId));
     }
 
     private void advanceProject(Project project) {
@@ -182,16 +185,29 @@ public class SheetTaskHandler implements TaskHandler {
         }
     }
 
-    private Long parseAssetId(String payload) {
+    /**
+     * 解析目标角色:{"assetIds":[1,2,3]}(批量勾选)或 {"assetId":1}(旧单角色),无 payload = 全量缺图角色。
+     */
+    private List<Long> parseAssetIds(String payload) {
         if (payload == null || payload.isBlank()) {
-            return null;
+            return List.of();
         }
         try {
             com.fasterxml.jackson.databind.JsonNode node =
                     new com.fasterxml.jackson.databind.ObjectMapper().readTree(payload);
-            return node.has("assetId") && node.get("assetId").canConvertToLong() ? node.get("assetId").asLong() : null;
+            List<Long> ids = new java.util.ArrayList<>();
+            if (node.has("assetIds") && node.get("assetIds").isArray()) {
+                node.get("assetIds").forEach(n -> {
+                    if (n.canConvertToLong()) {
+                        ids.add(n.asLong());
+                    }
+                });
+            } else if (node.has("assetId") && node.get("assetId").canConvertToLong()) {
+                ids.add(node.get("assetId").asLong());
+            }
+            return ids;
         } catch (Exception e) {
-            return null;
+            return List.of();
         }
     }
 }

@@ -1,4 +1,4 @@
-import { App, AutoComplete, Button, Card, Form, Image, Input, Modal, Popconfirm, Segmented, Select, Space, Table, Tabs, Tag, Tooltip, Typography, Upload } from 'antd';
+import { App, AutoComplete, Button, Card, Checkbox, Form, Image, Input, Modal, Popconfirm, Segmented, Select, Space, Table, Tabs, Tag, Tooltip, Typography, Upload } from 'antd';
 import { ArrowLeftOutlined, EditOutlined, FileImageOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -140,6 +140,7 @@ export function ProjectDetail() {
               children: (
                 <AssetsTab
                   projectId={projectId}
+                  project={project}
                   assets={assets ?? []}
                   category={assetCategory}
                   onCategoryChange={setAssetCategory}
@@ -551,9 +552,17 @@ function PageEditModal({ page, onClose }: { page: PageVO | null; onClose: () => 
   );
 }
 
-/** 资产库 Tab:四类分类标签,默认选中「角色」;角色支持生成设定表;支持 AI 重新提取 */
-function AssetsTab({ projectId, assets, category, onCategoryChange, onEdit, onAdd }: {
+/** 素材参考图可选画幅(生图模型支持的三档) */
+const RATIO_OPTIONS = [
+  { value: '16:9', label: '16:9 横版' },
+  { value: '3:4', label: '3:4 竖版' },
+  { value: '1:1', label: '1:1 方形' },
+];
+
+/** 资产库 Tab:四类分类标签,默认选中「角色」;勾选资产批量生成素材图(角色→设定表,其他→参考图) */
+function AssetsTab({ projectId, project, assets, category, onCategoryChange, onEdit, onAdd }: {
   projectId: number;
+  project: ProjectVO;
   assets: AssetVO[];
   category: number;
   onCategoryChange: (v: number) => void;
@@ -564,15 +573,43 @@ function AssetsTab({ projectId, assets, category, onCategoryChange, onEdit, onAd
   const queryClient = useQueryClient();
   const countOf = (type: number) => assets.filter((a) => a.assetType === type).length;
   const list = assets.filter((a) => a.assetType === category);
+  const isCharacter = category === 1;
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  const toggle = (id: number, checked: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
 
   const genSheet = async (asset: AssetVO) => {
+    await generateBatch([asset.id]);
+  };
+
+  /** 批量生成素材图:角色→设定表任务,场景/道具/服装→参考图任务 */
+  const generateBatch = async (ids: number[]) => {
     try {
-      const task = await projectsApi.generateSheet(asset.id);
-      message.success(`设定表任务 #${task.id} 已创建`);
+      const tasks = await projectsApi.generateForAssets(projectId, ids);
+      message.success(`素材生成任务已创建(${tasks.map((t) => `#${t.id}`).join('、')}),并发生成中`);
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['assets', projectId] });
+      setSelected(new Set());
     } catch (e) {
       message.error(e instanceof Error ? e.message : '操作失败');
+    }
+  };
+
+  /** 修改素材参考图画幅配置(保存到作品,生成前可随时调整) */
+  const updateRatio = async (field: 'sceneRatio' | 'propRatio' | 'costumeRatio', value: string) => {
+    try {
+      await projectsApi.update(projectId, { [field]: value });
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+      message.success('素材比例已保存');
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '保存失败');
     }
   };
 
@@ -581,23 +618,50 @@ function AssetsTab({ projectId, assets, category, onCategoryChange, onEdit, onAd
       await projectsApi.rebuildAssets(projectId);
       message.success('资产提取任务已创建');
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      setSelected(new Set());
     } catch (e) {
       message.error(e instanceof Error ? e.message : '操作失败');
     }
   };
 
+  const ratioSelect = (label: string, field: 'sceneRatio' | 'propRatio' | 'costumeRatio', value: string | null) => (
+    <Space size={4}>
+      <Typography.Text type="secondary" className="text-xs">{label}</Typography.Text>
+      <Select
+        size="small"
+        style={{ width: 92 }}
+        value={value ?? '1:1'}
+        onChange={(v) => updateRatio(field, v)}
+        options={RATIO_OPTIONS}
+      />
+    </Space>
+  );
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
         <Segmented
           value={category}
-          onChange={(v) => onCategoryChange(Number(v))}
+          onChange={(v) => {
+            setSelected(new Set());
+            onCategoryChange(Number(v));
+          }}
           options={[1, 2, 3, 4].map((type) => ({
             value: type,
             label: `${ASSET_TYPE_NAMES[type]}(${countOf(type)})`,
           }))}
         />
-        <Space>
+        <Space wrap>
+          {!isCharacter && (
+            <>
+              {ratioSelect('场景比例', 'sceneRatio', project.sceneRatio)}
+              {ratioSelect('道具比例', 'propRatio', project.propRatio)}
+              {ratioSelect('服装比例', 'costumeRatio', project.costumeRatio)}
+            </>
+          )}
+          {isCharacter && (
+            <Typography.Text type="secondary" className="text-xs">设定表固定 3:4</Typography.Text>
+          )}
           <Tooltip title="AI 从故事原文重新提取四类资产(同名跳过)">
             <Button size="small" icon={<ReloadOutlined />} onClick={rebuild}>
               AI 重新提取
@@ -609,6 +673,30 @@ function AssetsTab({ projectId, assets, category, onCategoryChange, onEdit, onAd
         </Space>
       </div>
 
+      {list.length > 0 && (
+        <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-indigo-50/60 border border-indigo-100">
+          <Checkbox
+            checked={selected.size > 0 && selected.size === list.length}
+            indeterminate={selected.size > 0 && selected.size < list.length}
+            onChange={(e) => setSelected(e.target.checked ? new Set(list.map((a) => a.id)) : new Set())}
+          >
+            <span className="text-sm">全选</span>
+          </Checkbox>
+          <Typography.Text type="secondary" className="text-xs">
+            已选 {selected.size} 项{isCharacter ? ',将并发生成六姿势设定表' : ',将并发生成概念参考图'}
+          </Typography.Text>
+          <div className="flex-1" />
+          <Button
+            type="primary"
+            size="small"
+            disabled={selected.size === 0}
+            onClick={() => generateBatch([...selected])}
+          >
+            {isCharacter ? '生成设定表' : '生成参考图'}{selected.size > 0 ? `(${selected.size})` : ''}
+          </Button>
+        </div>
+      )}
+
       {list.length === 0 ? (
         <Typography.Text type="secondary">
           暂无{ASSET_TYPE_NAMES[category]}资产 —— 第一步流水线会自动从脚本中提取(Phase 5)
@@ -618,10 +706,14 @@ function AssetsTab({ projectId, assets, category, onCategoryChange, onEdit, onAd
           {list.map((asset) => {
             // 图片来源优先级:角色设定表 > 参考图;点击可放大预览
             const imageUrl = asset.sheetImageUrl || asset.referenceUrl || '';
-            const generating = asset.assetType === 1 && asset.genStatus === 1;
+            const generating = asset.genStatus === 1;
+            const checked = selected.has(asset.id);
             return (
-              <div key={asset.id} className="p-2 rounded-xl border border-gray-200 bg-white hover:border-indigo-400 hover:shadow-sm transition flex flex-col">
+              <div key={asset.id} className={`p-2 rounded-xl border bg-white transition flex flex-col ${checked ? 'border-indigo-500 ring-1 ring-indigo-200' : 'border-gray-200 hover:border-indigo-400 hover:shadow-sm'}`}>
                 <div className="relative rounded-lg overflow-hidden bg-gray-50 aspect-[3/4] flex items-center justify-center">
+                  <div className="absolute top-1.5 left-1.5 z-10">
+                    <Checkbox checked={checked} onChange={(e) => toggle(asset.id, e.target.checked)} />
+                  </div>
                   {imageUrl ? (
                     <Image
                       src={imageUrl}
@@ -632,7 +724,7 @@ function AssetsTab({ projectId, assets, category, onCategoryChange, onEdit, onAd
                   ) : (
                     <div className="flex flex-col items-center gap-1 text-gray-300">
                       <FileImageOutlined className="text-3xl" />
-                      <span className="text-xs">{generating ? '设定表生成中…' : '暂无图片'}</span>
+                      <span className="text-xs">{generating ? '图片生成中…' : '暂无图片'}</span>
                     </div>
                   )}
                   {generating && (
@@ -645,15 +737,22 @@ function AssetsTab({ projectId, assets, category, onCategoryChange, onEdit, onAd
                   <Typography.Text strong ellipsis className="flex-1" title={asset.name}>
                     {asset.name}
                   </Typography.Text>
-                  {asset.assetType === 1 && !generating && !asset.sheetImageUrl && (
+                  {isCharacter && !generating && !asset.sheetImageUrl && (
                     <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => genSheet(asset)}>
                       生成设定表
                     </Button>
                   )}
-                  {asset.assetType === 1 && asset.sheetImageUrl && !generating && (
+                  {isCharacter && asset.sheetImageUrl && !generating && (
                     <Tooltip title="重新生成设定表">
                       <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => genSheet(asset)}>
                         重生成
+                      </Button>
+                    </Tooltip>
+                  )}
+                  {!isCharacter && (
+                    <Tooltip title={asset.referenceUrl ? '重新生成参考图' : '生成参考图'}>
+                      <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => genSheet(asset)}>
+                        {asset.referenceUrl ? '重生成' : '生成参考图'}
                       </Button>
                     </Tooltip>
                   )}

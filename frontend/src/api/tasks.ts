@@ -28,6 +28,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   SCRIPT: '脚本生成',
   ASSET: '资产提取',
   SHEET: '角色设定表',
+  ASSET_REF: '素材参考图',
   BATCH: '整本生成',
   PAGE: '页生成',
   LAYOUT: '布局图',

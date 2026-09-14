@@ -10,6 +10,12 @@ export interface ProjectVO {
   title: string;
   status: number; // 0准备中 1待出图 2出图中 3完成 4部分失败
   aspectRatio: string;
+  /** 素材参考图画幅:场景(默认 16:9) */
+  sceneRatio: string | null;
+  /** 素材参考图画幅:道具(默认 1:1) */
+  propRatio: string | null;
+  /** 素材参考图画幅:服装(默认 3:4) */
+  costumeRatio: string | null;
   colorMode: string;
   stylePresetId: number | null;
   tagline: string | null;
@@ -84,6 +90,12 @@ export interface ProjectSettings {
   aspectRatio?: AspectRatio;
   colorMode?: ColorMode;
   stylePresetId?: number | null;
+  /** 素材参考图画幅:场景(默认 16:9) */
+  sceneRatio?: string;
+  /** 素材参考图画幅:道具(默认 1:1) */
+  propRatio?: string;
+  /** 素材参考图画幅:服装(默认 3:4) */
+  costumeRatio?: string;
 }
 
 export interface PageResult<T> {
@@ -109,6 +121,9 @@ export const projectsApi = {
     if (settings.aspectRatio) form.append('aspectRatio', settings.aspectRatio);
     if (settings.colorMode) form.append('colorMode', settings.colorMode);
     if (settings.stylePresetId) form.append('stylePresetId', String(settings.stylePresetId));
+    if (settings.sceneRatio) form.append('sceneRatio', settings.sceneRatio);
+    if (settings.propRatio) form.append('propRatio', settings.propRatio);
+    if (settings.costumeRatio) form.append('costumeRatio', settings.costumeRatio);
     return unwrap<ProjectVO[]>(http.post('/projects/import', form, { timeout: 120000 }));
   },
   update: (
@@ -117,6 +132,9 @@ export const projectsApi = {
       title: string;
       aspectRatio: string;
       colorMode: string;
+      sceneRatio: string;
+      propRatio: string;
+      costumeRatio: string;
       stylePresetId: number | null;
       tagline: string;
       description: string;
@@ -131,6 +149,9 @@ export const projectsApi = {
   rebuildAssets: (id: number) => unwrap<TaskVO>(http.post(`/projects/${id}/rebuild-assets`)),
   regenerateScript: (chapterId: number) => unwrap<TaskVO>(http.post(`/chapters/${chapterId}/regenerate-script`)),
   generateSheet: (assetId: number) => unwrap<TaskVO>(http.post(`/assets/${assetId}/generate-sheet`)),
+  /** 批量生成勾选资产素材图:角色→设定表,场景/道具/服装→参考图(混选时可能返回多个任务) */
+  generateForAssets: (projectId: number, assetIds: number[]) =>
+    unwrap<TaskVO[]>(http.post(`/projects/${projectId}/assets/generate`, { assetIds })),
   chapters: (projectId: number) => unwrap<ChapterVO[]>(http.get(`/projects/${projectId}/chapters`)),
   createChapter: (projectId: number, data: { title?: string; scriptText?: string }) =>
     unwrap<ChapterVO>(http.post(`/projects/${projectId}/chapters`, data)),

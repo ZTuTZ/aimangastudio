@@ -45,7 +45,8 @@ public class ProjectService extends ServiceImpl<ProjectMapper, Project> {
         return keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
-    public Project create(String title, String sourceText, String aspectRatio, String colorMode, Long stylePresetId) {
+    public Project create(String title, String sourceText, String aspectRatio, String colorMode, Long stylePresetId,
+                          String sceneRatio, String propRatio, String costumeRatio) {
         Project project = new Project();
         project.setUserId(CurrentUser.id());
         // 跨系统稳定 ID:创建时生成,此后任何操作(改标题/重拆话/重出图)都不得改变
@@ -55,6 +56,10 @@ public class ProjectService extends ServiceImpl<ProjectMapper, Project> {
         project.setAspectRatio(normalizeAspect(aspectRatio, "3:4"));
         project.setColorMode(normalizeColorMode(colorMode, "partial"));
         project.setStylePresetId(stylePresetId);
+        // 素材参考图画幅(场景/道具/服装),缺省用内置默认
+        project.setSceneRatio(normalizeAssetRatio(sceneRatio, "16:9"));
+        project.setPropRatio(normalizeAssetRatio(propRatio, "1:1"));
+        project.setCostumeRatio(normalizeAssetRatio(costumeRatio, "3:4"));
         project.setStatus(Project.STATUS_PREPARING);
         project.setCategory("");
         project.setTags("[]");
@@ -90,6 +95,9 @@ public class ProjectService extends ServiceImpl<ProjectMapper, Project> {
         vo.setTitle(project.getTitle());
         vo.setStatus(project.getStatus());
         vo.setAspectRatio(project.getAspectRatio());
+        vo.setSceneRatio(project.getSceneRatio());
+        vo.setPropRatio(project.getPropRatio());
+        vo.setCostumeRatio(project.getCostumeRatio());
         vo.setColorMode(project.getColorMode());
         vo.setStylePresetId(project.getStylePresetId());
         vo.setTagline(project.getTagline());
@@ -118,6 +126,16 @@ public class ProjectService extends ServiceImpl<ProjectMapper, Project> {
         }
         if (request.colorMode() != null && !request.colorMode().isBlank()) {
             patch.setColorMode(normalizeColorMode(request.colorMode(), project.getColorMode()));
+        }
+        // 素材参考图画幅(脚本完成后、生成素材图之前可改)
+        if (request.sceneRatio() != null && !request.sceneRatio().isBlank()) {
+            patch.setSceneRatio(normalizeAssetRatio(request.sceneRatio(), project.getSceneRatio()));
+        }
+        if (request.propRatio() != null && !request.propRatio().isBlank()) {
+            patch.setPropRatio(normalizeAssetRatio(request.propRatio(), project.getPropRatio()));
+        }
+        if (request.costumeRatio() != null && !request.costumeRatio().isBlank()) {
+            patch.setCostumeRatio(normalizeAssetRatio(request.costumeRatio(), project.getCostumeRatio()));
         }
         if (request.stylePresetId() != null) {
             patch.setStylePresetId(request.stylePresetId());
@@ -188,6 +206,23 @@ public class ProjectService extends ServiceImpl<ProjectMapper, Project> {
         }
         return switch (value) {
             case "partial", "monochrome", "color" -> value;
+            default -> fallback;
+        };
+    }
+
+    /**
+     * 素材参考图画幅(仅支持生图模型实际支持的三档):
+     * 3:4 竖版 / 1:1 方形 / 16:9 横版;2:3 视为 3:4。
+     */
+    public static String normalizeAssetRatio(String value, String fallback) {
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        return switch (value) {
+            case "3:4", "1:1", "16:9" -> value;
+            case "2:3", "A4", "竖版" -> "3:4";
+            case "正方形" -> "1:1";
+            case "横版" -> "16:9";
             default -> fallback;
         };
     }

@@ -29,7 +29,8 @@ public class ImportService {
 
     private final ProjectService projectService;
 
-    public List<Project> importFiles(List<MultipartFile> files, String aspectRatio, String colorMode, Long stylePresetId) {
+    public List<Project> importFiles(List<MultipartFile> files, String aspectRatio, String colorMode, Long stylePresetId,
+                                     String sceneRatio, String propRatio, String costumeRatio) {
         List<Project> created = new ArrayList<>();
         List<String> errors = new ArrayList<>();
         for (MultipartFile file : files) {
@@ -41,7 +42,8 @@ public class ImportService {
                     continue;
                 }
                 String title = stripExt(filename);
-                created.add(projectService.create(title, text, aspectRatio, colorMode, stylePresetId));
+                created.add(projectService.create(title, text, aspectRatio, colorMode, stylePresetId,
+                        sceneRatio, propRatio, costumeRatio));
             } catch (BusinessException e) {
                 errors.add(filename + ": " + e.getMessage());
             } catch (Exception e) {

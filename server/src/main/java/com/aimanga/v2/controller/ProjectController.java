@@ -56,7 +56,8 @@ public class ProjectController {
     @PostMapping
     public Result<ProjectVO> create(@Valid @RequestBody CreateProjectRequest request) {
         Project created = projectService.create(request.title(), request.sourceText(),
-                request.aspectRatio(), request.colorMode(), request.stylePresetId());
+                request.aspectRatio(), request.colorMode(), request.stylePresetId(),
+                request.sceneRatio(), request.propRatio(), request.costumeRatio());
         return Result.ok(projectService.toVO(created));
     }
 
@@ -66,11 +67,15 @@ public class ProjectController {
             @RequestParam("files") List<MultipartFile> files,
             @RequestParam(value = "aspectRatio", required = false, defaultValue = "3:4") String aspectRatio,
             @RequestParam(value = "colorMode", required = false, defaultValue = "partial") String colorMode,
-            @RequestParam(value = "stylePresetId", required = false) Long stylePresetId) {
+            @RequestParam(value = "stylePresetId", required = false) Long stylePresetId,
+            @RequestParam(value = "sceneRatio", required = false, defaultValue = "16:9") String sceneRatio,
+            @RequestParam(value = "propRatio", required = false, defaultValue = "1:1") String propRatio,
+            @RequestParam(value = "costumeRatio", required = false, defaultValue = "3:4") String costumeRatio) {
         if (files == null || files.isEmpty()) {
             throw new BusinessException(400, "请选择要导入的文件");
         }
-        return Result.ok(importService.importFiles(files, aspectRatio, colorMode, stylePresetId)
+        return Result.ok(importService.importFiles(files, aspectRatio, colorMode, stylePresetId,
+                        sceneRatio, propRatio, costumeRatio)
                 .stream().map(projectService::toVO).toList());
     }
 

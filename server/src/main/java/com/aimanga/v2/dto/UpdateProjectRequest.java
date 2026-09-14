@@ -10,6 +10,12 @@ public record UpdateProjectRequest(
         String title,
         String aspectRatio,
         String colorMode,
+        /** 素材参考图画幅:场景(默认 16:9) */
+        String sceneRatio,
+        /** 素材参考图画幅:道具(默认 1:1) */
+        String propRatio,
+        /** 素材参考图画幅:服装(默认 3:4) */
+        String costumeRatio,
         Long stylePresetId,
         String tagline,
         String description,

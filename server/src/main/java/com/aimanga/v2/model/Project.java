@@ -37,6 +37,15 @@ public class Project {
     /** 3:4 / 2:3 / 1:1 / 16:9 */
     private String aspectRatio;
 
+    /** 素材参考图画幅:场景(默认 16:9) */
+    private String sceneRatio;
+
+    /** 素材参考图画幅:道具(默认 1:1) */
+    private String propRatio;
+
+    /** 素材参考图画幅:服装(默认 3:4) */
+    private String costumeRatio;
+
     /** partial / monochrome / color */
     private String colorMode;
 

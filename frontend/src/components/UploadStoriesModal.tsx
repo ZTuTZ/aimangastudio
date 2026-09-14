@@ -9,6 +9,13 @@ interface UploadStoriesModalProps {
   onClose: () => void;
 }
 
+/** 素材参考图可选画幅(生图模型支持的三档) */
+const RATIO_OPTIONS = [
+  { value: '16:9', label: '16:9 横版' },
+  { value: '3:4', label: '3:4 竖版' },
+  { value: '1:1', label: '1:1 方形' },
+];
+
 /** 批量上传导入:多文件 TXT/DOCX 或 粘贴文本;创建即自动启动第一步流水线(任务系统上线后生效) */
 export function UploadStoriesModal({ open, onClose }: UploadStoriesModalProps) {
   const { message } = App.useApp();
@@ -17,7 +24,7 @@ export function UploadStoriesModal({ open, onClose }: UploadStoriesModalProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [title, setTitle] = useState('');
   const [sourceText, setSourceText] = useState('');
-  const [settings, setSettings] = useState<ProjectSettings>({ aspectRatio: '3:4', colorMode: 'partial' });
+  const [settings, setSettings] = useState<ProjectSettings>({ aspectRatio: '3:4', colorMode: 'partial', sceneRatio: '16:9', propRatio: '1:1', costumeRatio: '3:4' });
   const [submitting, setSubmitting] = useState(false);
 
   const { data: presets } = useQuery({
@@ -30,7 +37,7 @@ export function UploadStoriesModal({ open, onClose }: UploadStoriesModalProps) {
     setFiles([]);
     setTitle('');
     setSourceText('');
-    setSettings({ aspectRatio: '3:4', colorMode: 'partial' });
+    setSettings({ aspectRatio: '3:4', colorMode: 'partial', sceneRatio: '16:9', propRatio: '1:1', costumeRatio: '3:4' });
   };
 
   const close = () => {
@@ -47,14 +54,14 @@ export function UploadStoriesModal({ open, onClose }: UploadStoriesModalProps) {
           return;
         }
         const created = await projectsApi.importFiles(files, settings);
-        message.success(`已导入 ${created.length} 部作品,准备流水线已自动开始(拆话→脚本→资产→设定表)`);
+        message.success(`已导入 ${created.length} 部作品,准备流水线已自动开始(拆话→脚本→资产);素材图请在作品详情的资产库中勾选生成`);
       } else {
         if (!title.trim() || !sourceText.trim()) {
           message.warning('请填写标题与故事原文');
           return;
         }
         await projectsApi.create({ title: title.trim(), sourceText: sourceText.trim(), ...settings });
-        message.success('作品已创建,准备流水线已自动开始(拆话→脚本→资产→设定表)');
+        message.success('作品已创建,准备流水线已自动开始(拆话→脚本→资产);素材图请在作品详情的资产库中勾选生成');
       }
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       close();
@@ -166,6 +173,39 @@ export function UploadStoriesModal({ open, onClose }: UploadStoriesModalProps) {
             value={settings.stylePresetId ?? undefined}
             onChange={(v) => setSettings((s) => ({ ...s, stylePresetId: v ?? null }))}
             options={(presets ?? []).map((p) => ({ value: p.id, label: p.name }))}
+          />
+        </div>
+      </div>
+
+      <Typography.Text type="secondary" className="block mt-4 mb-2 text-xs">
+        素材比例(场景/道具/服装参考图,生成前可随时在作品详情修改)
+      </Typography.Text>
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <Typography.Text type="secondary" className="block mb-1 text-xs">场景</Typography.Text>
+          <Select
+            style={{ width: '100%' }}
+            value={settings.sceneRatio ?? '16:9'}
+            onChange={(v) => setSettings((s) => ({ ...s, sceneRatio: v }))}
+            options={RATIO_OPTIONS}
+          />
+        </div>
+        <div>
+          <Typography.Text type="secondary" className="block mb-1 text-xs">道具</Typography.Text>
+          <Select
+            style={{ width: '100%' }}
+            value={settings.propRatio ?? '1:1'}
+            onChange={(v) => setSettings((s) => ({ ...s, propRatio: v }))}
+            options={RATIO_OPTIONS}
+          />
+        </div>
+        <div>
+          <Typography.Text type="secondary" className="block mb-1 text-xs">服装</Typography.Text>
+          <Select
+            style={{ width: '100%' }}
+            value={settings.costumeRatio ?? '3:4'}
+            onChange={(v) => setSettings((s) => ({ ...s, costumeRatio: v }))}
+            options={RATIO_OPTIONS}
           />
         </div>
       </div>

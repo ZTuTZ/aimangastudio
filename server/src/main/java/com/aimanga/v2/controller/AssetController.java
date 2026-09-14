@@ -56,4 +56,54 @@ public class AssetController {
         return Result.ok(taskService.create(
                 new com.aimanga.v2.dto.CreateTaskRequest(asset.getProjectId(), null, "SHEET", payload)));
     }
+
+    /**
+     * 批量生成勾选资产的素材图:角色→六姿势设定表(SHEET 任务),场景/道具/服装→参考图(ASSET_REF 任务)。
+     * 混选时按类型拆成多个任务,返回创建的任务列表。
+     */
+    @PostMapping("/projects/{projectId}/assets/generate")
+    public Result<List<com.aimanga.v2.dto.TaskVO>> generateBatch(@PathVariable Long projectId,
+                                                                 @RequestBody BatchAssetRequest request) {
+        if (request.assetIds() == null || request.assetIds().isEmpty()) {
+            throw new com.aimanga.v2.common.BusinessException(400, "请先勾选要生成的资产");
+        }
+        List<Long> characterIds = new java.util.ArrayList<>();
+        List<Long> refIds = new java.util.ArrayList<>();
+        for (Long assetId : request.assetIds()) {
+            Asset asset = assetService.requireAccessible(assetId);
+            if (!asset.getProjectId().equals(projectId)) {
+                throw new com.aimanga.v2.common.BusinessException(404, "资产不存在: " + assetId);
+            }
+            if (asset.getAssetType() != null && asset.getAssetType() == Asset.TYPE_CHARACTER) {
+                characterIds.add(assetId);
+            } else {
+                refIds.add(assetId);
+            }
+        }
+        if (characterIds.isEmpty() && refIds.isEmpty()) {
+            throw new com.aimanga.v2.common.BusinessException(400, "请先勾选要生成的资产");
+        }
+        List<com.aimanga.v2.dto.TaskVO> tasks = new java.util.ArrayList<>();
+        if (!characterIds.isEmpty()) {
+            tasks.add(taskService.create(new com.aimanga.v2.dto.CreateTaskRequest(
+                    projectId, null, "SHEET", batchPayload(characterIds))));
+        }
+        if (!refIds.isEmpty()) {
+            tasks.add(taskService.create(new com.aimanga.v2.dto.CreateTaskRequest(
+                    projectId, null, "ASSET_REF", batchPayload(refIds))));
+        }
+        return Result.ok(tasks);
+    }
+
+    private static com.fasterxml.jackson.databind.JsonNode batchPayload(List<Long> assetIds) {
+        var mapper = com.fasterxml.jackson.databind.json.JsonMapper.builder().build();
+        var node = mapper.createObjectNode();
+        var arr = node.putArray("assetIds");
+        assetIds.forEach(arr::add);
+        return node;
+    }
+
+    /** 批量生成请求体 */
+    public record BatchAssetRequest(java.util.List<Long> assetIds) {
+    }
 }
