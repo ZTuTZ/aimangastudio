@@ -5,6 +5,7 @@ import com.aimanga.v2.dto.PageVO;
 import com.aimanga.v2.dto.UpdatePageRequest;
 import com.aimanga.v2.model.Chapter;
 import com.aimanga.v2.model.PageEntity;
+import com.aimanga.v2.pipeline.PageAssetBindingService;
 import com.aimanga.v2.repository.PageMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -20,6 +21,7 @@ import java.util.List;
 public class PageService extends ServiceImpl<PageMapper, PageEntity> {
 
     private final ChapterService chapterService;
+    private final PageAssetBindingService pageAssetBindingService;
     private final ObjectMapper objectMapper;
 
     public List<PageVO> listByChapter(Long chapterId) {
@@ -67,6 +69,17 @@ public class PageService extends ServiceImpl<PageMapper, PageEntity> {
         applyScript(patch, request);
         patch.setUpdateTime(LocalDateTime.now());
         updateById(patch);
+        boolean textEdited = request != null
+                && (request.narration() != null || request.dialogue() != null
+                    || request.visual() != null || request.sceneDescription() != null);
+        if (textEdited) {
+            // T6.5.4:脚本文本修改 → 版本+1(布局/成品图据此判定过期,不删旧图)
+            baseMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<PageEntity>()
+                    .eq(PageEntity::getId, pageId)
+                    .setSql("script_version = script_version + 1"));
+            // T6.5.5:保持页-素材绑定与新脚本一致
+            pageAssetBindingService.rebuildPage(pageId);
+        }
         return getById(pageId);
     }
 
@@ -101,6 +114,8 @@ public class PageService extends ServiceImpl<PageMapper, PageEntity> {
         return new PageVO(page.getId(), page.getChapterId(), page.getPageNo(),
                 page.getNarration(), page.getDialogue(), page.getVisual(), page.getSceneDescription(),
                 page.getLayoutImageUrl(), page.getGeneratedImageUrl(), page.getColorMode(),
-                page.getGenerateStatus(), page.getFailReason());
+                page.getGenerateStatus(), page.getFailReason(),
+                page.getScriptVersion(), page.getLayoutScriptVersion(), page.getImageScriptVersion(),
+                page.getGenerateRecords());
     }
 }

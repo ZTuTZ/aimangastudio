@@ -39,15 +39,19 @@ public class PageGenerationService {
     private final AiService aiService;
     private final ObjectMapper objectMapper;
 
-    /** 处理单页成品:返回成品图 URL;force=用户强制重生成时跳过幂等 */
+    /** 处理单页成品:返回成品图 URL;force=用户强制重生成时跳过幂等。
+     *  T6.5.4:已有成品图但脚本版本更新(imageScriptVersion < scriptVersion)视为过期,不删旧图,直接重画。 */
     public String processPage(Project project, PageEntity page, String colorMode, boolean force) {
-        if (!force && page.getGeneratedImageUrl() != null && !page.getGeneratedImageUrl().isBlank()) {
+        boolean fresh = page.getGeneratedImageUrl() != null && !page.getGeneratedImageUrl().isBlank()
+                && page.getImageScriptVersion() != null
+                && page.getImageScriptVersion().equals(orOne(page.getScriptVersion()));
+        if (!force && fresh) {
             return page.getGeneratedImageUrl();
         }
         if (page.getLayoutImageUrl() == null || page.getLayoutImageUrl().isBlank()) {
             throw new BusinessException(400, "页面 " + page.getPageNo() + " 还没有布局图,请先生成布局");
         }
-        markPageStatus(page.getId(), PageEntity.GEN_RUNNING, null, null, null, null);
+        markPageStatus(page.getId(), PageEntity.GEN_RUNNING, null, null, null, null, null);
         PageReferenceResolver.ResolvedReferences refs =
                 referenceResolver.resolve(project.getId(), page.getId(), project);
         // 最终参考图:布局图置顶(构图约束),其后为素材图(身份/环境约束)
@@ -62,18 +66,23 @@ public class PageGenerationService {
             // §9:先 OSS 转存 → 写业务字段 → 追加 generate_records → Runner 标 Item SUCCESS
             String url = aiService.generateImage("image", prompt, images, project.getAspectRatio(), project.getUserId());
             markPageStatus(page.getId(), PageEntity.GEN_SUCCESS, url, mode, null,
-                    appendRecord(page.getGenerateRecords(), url, mode));
+                    appendRecord(page.getGenerateRecords(), url, mode), orOne(page.getScriptVersion()));
             log.info("[page-gen] 作品 {} 话{} 页#{} 成品页已生成: {}", project.getId(), page.getChapterId(), page.getPageNo(), url);
             return url;
         } catch (RuntimeException e) {
             String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             markPageStatus(page.getId(), PageEntity.GEN_FAILED, null, null,
-                    reason, appendRecord(page.getGenerateRecords(), "", mode));
+                    reason, appendRecord(page.getGenerateRecords(), "", mode), null);
             throw e;
         }
     }
 
-    private void markPageStatus(Long pageId, Integer status, String url, String colorMode, String failReason, String records) {
+    private static int orOne(Integer version) {
+        return version == null ? 1 : version;
+    }
+
+    private void markPageStatus(Long pageId, Integer status, String url, String colorMode, String failReason,
+                                String records, Integer imageScriptVersion) {
         PageEntity patch = new PageEntity();
         patch.setId(pageId);
         patch.setGenerateStatus(status);
@@ -81,6 +90,7 @@ public class PageGenerationService {
         patch.setColorMode(colorMode);
         patch.setFailReason(failReason);
         patch.setGenerateRecords(records);
+        patch.setImageScriptVersion(imageScriptVersion);
         patch.setUpdateTime(LocalDateTime.now());
         pageMapper.updateById(patch);
     }

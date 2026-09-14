@@ -85,7 +85,7 @@ public class BatchTaskHandler implements TaskHandler {
         chapters.forEach(c -> markChapterStatus(c.getId(), Chapter.STATUS_GENERATING));
 
         int totalSteps = pages.size() + (int) pages.stream()
-                .filter(p -> forceImage || !skipGenerated || blank(p.getGeneratedImageUrl()))
+                .filter(p -> forceImage || !skipGenerated || staleOrMissing(p))
                 .count();
         runtime.begin(Math.max(1, totalSteps));
 
@@ -203,7 +203,7 @@ public class BatchTaskHandler implements TaskHandler {
     /** IMAGE Items:skipGenerated=true 时只处理尚无成品图的页;forceImage 时全部强制重画 */
     private void syncImageItems(Long projectId, List<PageEntity> pages, boolean skipGenerated, boolean forceImage) {
         List<Long> needGen = pages.stream()
-                .filter(p -> forceImage || !skipGenerated || blank(p.getGeneratedImageUrl()))
+                .filter(p -> forceImage || !skipGenerated || staleOrMissing(p))
                 .map(PageEntity::getId)
                 .toList();
         stageService.removeOrphanItems(projectId, PipelineStageService.STAGE_IMAGE, BUSINESS_TYPE_PAGE,
@@ -251,6 +251,16 @@ public class BatchTaskHandler implements TaskHandler {
 
     private static boolean blank(String s) {
         return s == null || s.isBlank();
+    }
+
+    /** T6.5.4:无成品图,或脚本版本已更新(成品过期)都视为需要生成 */
+    private static boolean staleOrMissing(PageEntity p) {
+        if (blank(p.getGeneratedImageUrl())) {
+            return true;
+        }
+        int scriptVersion = p.getScriptVersion() == null ? 1 : p.getScriptVersion();
+        Integer imageVersion = p.getImageScriptVersion();
+        return imageVersion == null || imageVersion < scriptVersion;
     }
 
     private JsonNode parse(String payload) {

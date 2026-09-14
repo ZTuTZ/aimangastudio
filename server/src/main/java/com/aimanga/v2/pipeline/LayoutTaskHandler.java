@@ -49,7 +49,8 @@ public class LayoutTaskHandler implements TaskHandler {
 
         syncItems(project, chapterId);
         if (pageId != null) {
-            // 手动单页重布局:强制重置该页 Item(force 标记 → 跳过幂等)
+            // 手动单页重布局(T6.5.2):确保 Item 存在(已有布局图的页平时不建 Item)并强制重置
+            stageService.createItems(project.getId(), PipelineStageService.STAGE_LAYOUT, BUSINESS_TYPE_PAGE, List.of(pageId));
             stageService.forceResetItemsByBusiness(project.getId(), PipelineStageService.STAGE_LAYOUT,
                     BUSINESS_TYPE_PAGE, List.of(pageId));
         }

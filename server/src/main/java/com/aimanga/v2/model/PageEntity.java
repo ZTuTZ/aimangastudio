@@ -51,6 +51,13 @@ public class PageEntity {
     /** 生成历史 JSON [{url,colorMode,kind,time}] */
     private String generateRecords;
 
+    /** 脚本版本(T6.5.4):文本每次修改 +1;布局/成品记录生成时的版本,小于脚本版本 = 过期 */
+    private Integer scriptVersion;
+
+    private Integer layoutScriptVersion;
+
+    private Integer imageScriptVersion;
+
     private LocalDateTime createTime;
 
     private LocalDateTime updateTime;

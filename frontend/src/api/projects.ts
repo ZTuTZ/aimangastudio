@@ -64,6 +64,10 @@ export interface PageVO {
   colorMode: string | null;
   generateStatus: number;
   failReason: string | null;
+  scriptVersion?: number | null;
+  layoutScriptVersion?: number | null;
+  imageScriptVersion?: number | null;
+  generateRecords?: string | null;
 }
 
 export interface AssetVO {
@@ -176,6 +180,10 @@ export const projectsApi = {
   pages: (chapterId: number) => unwrap<PageVO[]>(http.get(`/chapters/${chapterId}/pages`)),
   updatePage: (id: number, data: { narration?: string; dialogue?: string; visual?: string; sceneDescription?: string }) =>
     unwrap<PageVO>(http.put(`/pages/${id}`, data)),
+  page: (id: number) => unwrap<PageVO>(http.get(`/pages/${id}`)),
+  generatePageLayout: (id: number) => unwrap<TaskVO>(http.post(`/pages/${id}/generate-layout`)),
+  generatePageImage: (id: number, colorMode?: string) =>
+    unwrap<TaskVO>(http.post(`/pages/${id}/generate`, colorMode ? { colorMode } : {})),
   assets: (projectId: number) => unwrap<AssetVO[]>(http.get(`/projects/${projectId}/assets`)),
   createAsset: (projectId: number, data: AssetPayload) =>
     unwrap<AssetVO>(http.post(`/projects/${projectId}/assets`, data)),

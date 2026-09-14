@@ -12,5 +12,9 @@ public record PageVO(
         String generatedImageUrl,
         String colorMode,
         Integer generateStatus,
-        String failReason) {
+        String failReason,
+        Integer scriptVersion,
+        Integer layoutScriptVersion,
+        Integer imageScriptVersion,
+        String generateRecords) {
 }

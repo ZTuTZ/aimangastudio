@@ -1,0 +1,100 @@
+package com.aimanga.v2.pipeline;
+
+import com.aimanga.v2.common.BusinessException;
+import com.aimanga.v2.model.PageEntity;
+import com.aimanga.v2.model.PipelineStageItem;
+import com.aimanga.v2.model.Project;
+import com.aimanga.v2.model.TaskEntity;
+import com.aimanga.v2.task.TaskHandler;
+import com.aimanga.v2.task.TaskRuntime;
+import lombok.RequiredArgsConstructor;
+
+import java.util.List;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
+
+/**
+ * PAGE 单页成品重生成任务(Phase 6.5 T6.5.3,执行原则3:单页独立重生成才创建 PAGE Task):
+ * - payload {"pageId":x, "colorMode":"partial"} → 强制重画该页成品(旧图保留进 generate_records);
+ * - 复用 PageGenerationService,不另写 Prompt/参考逻辑;
+ * - 若同项目已有活跃 BATCH/PAGE 在跑,创建层复用语义 + Stage 执行互斥锁保证不并发抢 Item。
+ */
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class PageTaskHandler implements TaskHandler {
+
+    public static final String TYPE = "PAGE";
+    private static final String BUSINESS_TYPE_PAGE = "PAGE";
+
+    private final PipelineContext ctx;
+    private final PageGenerationService pageGenerationService;
+    private final PipelineStageService stageService;
+    private final ConcurrentStageRunner stageRunner;
+
+    @Override
+    public String type() {
+        return TYPE;
+    }
+
+    @Override
+    public void run(TaskEntity task, TaskRuntime runtime) {
+        Project project = ctx.project(task.getProjectId());
+        Long pageId = parseId(task.getPayload(), "pageId");
+        if (pageId == null) {
+            throw new BusinessException(400, "PAGE 任务需要在 payload 中提供 pageId");
+        }
+        String colorMode = parseString(task.getPayload(), "colorMode");
+
+        stageService.markRunning(project.getId(), PipelineStageService.STAGE_IMAGE);
+        stageService.createItems(project.getId(), PipelineStageService.STAGE_IMAGE, BUSINESS_TYPE_PAGE, List.of(pageId));
+        stageService.forceResetItemsByBusiness(project.getId(), PipelineStageService.STAGE_IMAGE,
+                BUSINESS_TYPE_PAGE, List.of(pageId));
+
+        PipelineStageService.StageItemStats before =
+                stageService.getItemStats(project.getId(), PipelineStageService.STAGE_IMAGE);
+        runtime.begin((int) Math.max(1, before.pending()));
+
+        stageRunner.run(project.getId(), PipelineStageService.STAGE_IMAGE, runtime,
+                item -> {
+                    PageEntity page = ctx.pageMapper.selectById(item.getBusinessId());
+                    if (page == null) {
+                        throw new BusinessException(404, "页面不存在: " + item.getBusinessId());
+                    }
+                    return "{\"pageId\":" + page.getId() + ",\"image\":\""
+                            + pageGenerationService.processPage(project, page, colorMode, true)
+                            + "\"}";
+                }, stageRunner.imageEngine());
+
+        if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_IMAGE)) {
+            return;
+        }
+        PipelineStageService.StageItemStats stats =
+                stageService.getItemStats(project.getId(), PipelineStageService.STAGE_IMAGE);
+        if (stats.failed() == 0) {
+            stageService.updateStageProgress(project.getId(), PipelineStageService.STAGE_IMAGE);
+        }
+    }
+
+    private Long parseId(String payload, String field) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode node =
+                    new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+                            payload == null || payload.isBlank() ? "{}" : payload);
+            return node.has(field) && node.get(field).canConvertToLong() ? node.get(field).asLong() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String parseString(String payload, String field) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode node =
+                    new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+                            payload == null || payload.isBlank() ? "{}" : payload);
+            return node.has(field) && node.get(field).isTextual() ? node.get(field).asText() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+}
