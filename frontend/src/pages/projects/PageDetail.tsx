@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Col, Image, Input, Row, Select, Space, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Col, Image, Input, Modal, Row, Select, Space, Tag, Typography } from 'antd';
 import { ArrowLeftOutlined, ReloadOutlined, SaveOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App } from 'antd';
@@ -29,6 +29,9 @@ export function PageDetail() {
   const [visual, setVisual] = useState('');
   const [sceneDescription, setSceneDescription] = useState('');
   const [regenColorMode, setRegenColorMode] = useState<string | undefined>(undefined);
+  const [repaintOpen, setRepaintOpen] = useState(false);
+  const [repaintPrompt, setRepaintPrompt] = useState('');
+  const [maskUrl, setMaskUrl] = useState('');
 
   useEffect(() => {
     if (page) {
@@ -59,6 +62,31 @@ export function PageDetail() {
       queryClient.invalidateQueries({ queryKey: ['page', pid] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
     },
+    onError: (e) => message.error(e instanceof Error ? e.message : '操作失败'),
+  });
+
+  const colorize = useMutation({
+    mutationFn: () => projectsApi.colorizePage(pid),
+    onSuccess: (t) => {
+      message.success(`上色任务 #${t.id} 已创建`);
+      queryClient.invalidateQueries({ queryKey: ['page', pid] });
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    },
+    onError: (e) => message.error(e instanceof Error ? e.message : '操作失败'),
+  });
+
+  const clean = useMutation({
+    mutationFn: () => projectsApi.cleanPage(pid),
+    onSuccess: (t) => {
+      message.success(`清晰化任务 #${t.id} 已创建`);
+      queryClient.invalidateQueries({ queryKey: ['page', pid] });
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    },
+    onError: (e) => message.error(e instanceof Error ? e.message : '操作失败'),
+  });
+
+  const repaint = useMutation({
+    mutationFn: () => projectsApi.repaintPage(pid, { repaintPrompt, maskUrl }),
     onError: (e) => message.error(e instanceof Error ? e.message : '操作失败'),
   });
 
@@ -177,9 +205,69 @@ export function PageDetail() {
             {page.failReason && page.generateStatus === 3 && (
               <Alert type="error" className="mt-2" message={page.failReason} />
             )}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button size="small" onClick={() => colorize.mutate()} loading={colorize.isPending}>上色</Button>
+              <Button size="small" onClick={() => clean.mutate()} loading={clean.isPending}>清晰化</Button>
+              <Button size="small" onClick={() => setRepaintOpen(true)}>局部重绘</Button>
+            </div>
           </Card>
         </Col>
       </Row>
+
+      <Modal
+        open={repaintOpen}
+        title="局部重绘"
+        okText="开始重绘"
+        cancelText="取消"
+        confirmLoading={repaint.isPending}
+        onCancel={() => setRepaintOpen(false)}
+        onOk={async () => {
+          if (!repaintPrompt.trim()) {
+            message.warning('请填写重绘提示词');
+            return;
+          }
+          if (!maskUrl) {
+            message.warning('请上传遮罩图(白色=重绘区域)');
+            return;
+          }
+          try {
+            const t = await projectsApi.repaintPage(pid, { repaintPrompt, maskUrl });
+            message.success(`局部重绘任务 #${t.id} 已创建`);
+            setRepaintOpen(false);
+            setMaskUrl('');
+            queryClient.invalidateQueries({ queryKey: ['page', pid] });
+          } catch (e) {
+            message.error(e instanceof Error ? e.message : '操作失败');
+          }
+        }}
+      >
+        <div className="flex flex-col gap-3">
+          <div>
+            <Typography.Text type="secondary" className="text-xs">重绘提示词(要修改成什么样)</Typography.Text>
+            <Input.TextArea rows={3} value={repaintPrompt} onChange={(e) => setRepaintPrompt(e.target.value)} />
+          </div>
+          <div>
+            <Typography.Text type="secondary" className="text-xs">遮罩图(白色=重绘区域,黑色=保留)</Typography.Text>
+            <input
+              type="file"
+              accept="image/*"
+              className="block mt-1 text-xs"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                try {
+                  const r = await projectsApi.uploadFile(file);
+                  setMaskUrl(r.url);
+                  message.success('遮罩图已上传');
+                } catch (err) {
+                  message.error(err instanceof Error ? err.message : '上传失败');
+                }
+              }}
+            />
+            {maskUrl && <Typography.Text className="text-xs">已上传 ✓</Typography.Text>}
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

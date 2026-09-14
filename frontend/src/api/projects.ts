@@ -184,6 +184,11 @@ export const projectsApi = {
   generatePageLayout: (id: number) => unwrap<TaskVO>(http.post(`/pages/${id}/generate-layout`)),
   generatePageImage: (id: number, colorMode?: string) =>
     unwrap<TaskVO>(http.post(`/pages/${id}/generate`, colorMode ? { colorMode } : {})),
+  colorizePage: (id: number, colorMode?: string) =>
+    unwrap<TaskVO>(http.post(`/pages/${id}/colorize`, colorMode ? { colorMode } : {})),
+  cleanPage: (id: number) => unwrap<TaskVO>(http.post(`/pages/${id}/clean`)),
+  repaintPage: (id: number, data: { repaintPrompt: string; maskUrl: string }) =>
+    unwrap<TaskVO>(http.post(`/pages/${id}/repaint`, data)),
   assets: (projectId: number) => unwrap<AssetVO[]>(http.get(`/projects/${projectId}/assets`)),
   createAsset: (projectId: number, data: AssetPayload) =>
     unwrap<AssetVO>(http.post(`/projects/${projectId}/assets`, data)),

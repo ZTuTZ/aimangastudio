@@ -80,7 +80,57 @@ public class PageController {
                 "{\"pageId\":" + id + ",\"colorMode\":\"" + colorMode + "\"}"));
     }
 
+    /** 单页上色(T6.6.1) */
+    @PostMapping("/pages/{id}/colorize")
+    public Result<com.aimanga.v2.dto.TaskVO> colorize(@PathVariable Long id,
+                                                      @RequestBody(required = false) SinglePageRequest request) {
+        return Result.ok(postProcess(id, "COLORIZE",
+                request == null ? null : request.colorMode(), null, null));
+    }
+
+    /** 单页清晰化(T6.6.2) */
+    @PostMapping("/pages/{id}/clean")
+    public Result<com.aimanga.v2.dto.TaskVO> clean(@PathVariable Long id) {
+        return Result.ok(postProcess(id, "CLEAN", null, null, null));
+    }
+
+    /** 单页局部重绘(T6.6.3):遮罩白=重绘区域 */
+    @PostMapping("/pages/{id}/repaint")
+    public Result<com.aimanga.v2.dto.TaskVO> repaint(@PathVariable Long id,
+                                                     @RequestBody RepaintRequest request) {
+        if (request.repaintPrompt() == null || request.repaintPrompt().isBlank()) {
+            throw new com.aimanga.v2.common.BusinessException(400, "请填写重绘提示词");
+        }
+        if (request.maskUrl() == null || request.maskUrl().isBlank()) {
+            throw new com.aimanga.v2.common.BusinessException(400, "请上传遮罩图(白色=重绘区域)");
+        }
+        return Result.ok(postProcess(id, "REPAINT", null, request.repaintPrompt(), request.maskUrl()));
+    }
+
+    private com.aimanga.v2.dto.TaskVO postProcess(Long pageId, String op, String colorMode, String repaintPrompt, String maskUrl) {
+        PageEntity page = pageService.requireAccessible(pageId);
+        stageService.createItems(page.getProjectId(), op, "PAGE", java.util.List.of(pageId));
+        stageService.forceResetItemsByBusiness(page.getProjectId(), op, "PAGE", java.util.List.of(pageId));
+        String payload;
+        try {
+            var mapper = com.fasterxml.jackson.databind.json.JsonMapper.builder().build();
+            var node = mapper.createObjectNode();
+            node.put("pageId", pageId);
+            if (colorMode != null && !colorMode.isBlank()) node.put("colorMode", colorMode);
+            if (repaintPrompt != null) node.put("repaintPrompt", repaintPrompt);
+            if (maskUrl != null) node.put("maskUrl", maskUrl);
+            payload = mapper.writeValueAsString(node);
+        } catch (Exception e) {
+            throw new com.aimanga.v2.common.BusinessException(500, "构造任务参数失败");
+        }
+        return taskService.ensureUniqueActiveTask(page.getProjectId(), null, op, payload);
+    }
+
     /** 单页生成请求体 */
     public record SinglePageRequest(String colorMode) {
+    }
+
+    /** 局部重绘请求体 */
+    public record RepaintRequest(String repaintPrompt, String maskUrl) {
     }
 }
