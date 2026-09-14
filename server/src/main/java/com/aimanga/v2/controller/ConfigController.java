@@ -31,6 +31,7 @@ public class ConfigController {
     private final AiService aiService;
     private final com.aimanga.v2.task.TaskWorkerPool taskWorkerPool;
     private final com.aimanga.v2.task.RedisSemaphores redisSemaphores;
+    private final com.aimanga.v2.pipeline.ImageWorkerPool imageWorkerPool;
 
     @GetMapping
     public Result<Map<String, String>> list() {
@@ -46,9 +47,10 @@ public class ConfigController {
         Map<String, String> toSave = new LinkedHashMap<>();
         rawMap.forEach((k, v) -> toSave.put(String.valueOf(k), v == null ? "" : String.valueOf(v)));
         configService.save(toSave);
-        // 任务系统热更新:Worker 池大小 + 分层并发信号量(层①②④)
+        // 任务系统热更新:Worker 池大小 + 分层并发信号量(层①②④)+ 生图引擎并发(Phase 5.9)
         taskWorkerPool.refresh(configService.getInt("task_max_concurrency", 5));
         redisSemaphores.refresh();
+        imageWorkerPool.refresh();
         log.info("[admin] 系统配置已更新并热生效: {}", toSave.keySet());
         return Result.ok(configService.toMaskedMap());
     }

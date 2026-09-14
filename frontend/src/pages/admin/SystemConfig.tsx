@@ -74,6 +74,15 @@ const GROUPS: GroupDef[] = [
     ],
   },
   {
+    key: 'image_engine',
+    title: '生图引擎(Phase 5.9 并发生图)',
+    fields: [
+      { key: 'image_generation_concurrency', label: '生图并发数(热更新,1-32)', type: 'number' },
+      { key: 'image_gen_max_retry', label: '单图失败重试次数', type: 'number' },
+      { key: 'image_queue_size', label: '线程池队列容量(重启生效)', type: 'number' },
+    ],
+  },
+  {
     key: 'oss',
     title: '阿里云 OSS(所有图片统一转存)',
     fields: [

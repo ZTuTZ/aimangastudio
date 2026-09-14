@@ -14,7 +14,6 @@ import com.aimanga.v2.pipeline.StoryScript.DialogueItem;
 import com.aimanga.v2.pipeline.text.SourceTextIndexer;
 import com.aimanga.v2.pipeline.text.SourceUnit;
 import com.aimanga.v2.task.TaskHandler;
-import com.aimanga.v2.task.TaskStopSignal;
 import com.aimanga.v2.task.TaskRuntime;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,15 +27,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
- * SCRIPT 六段式脚本任务(Phase 5.8 Stage Item 版):
+ * SCRIPT 六段式脚本任务(Phase 5.8 Stage Item + Phase 5.9 并发引擎):
  * 一个 SCRIPT Task 处理项目内全部 PENDING Stage Items(每话一个 Item)。
- * - 有控并发(task_page_concurrency),幂等跳过 SUCCESS Items;
+ * - ImageStageRunner 有控并发 + 原子领取 + 单元失败重试(max_retry),幂等跳过 SUCCESS Items;
  * - 注入全书标准资产上下文({assets}),禁止重新设计已有角色;
  * - 页级 Source Spine 校验 + 程序侧修复;
  * - speaker 合法集 = 全局角色 name+aliases + 本话新角色,未知说话人并入旁白;
@@ -54,6 +49,7 @@ public class ScriptTaskHandler implements TaskHandler {
     private final PromptService promptService;
     private final AssetContextService assetContextService;
     private final PipelineStageService stageService;
+    private final ImageStageRunner imageStageRunner;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -64,6 +60,9 @@ public class ScriptTaskHandler implements TaskHandler {
     @Override
     public void run(TaskEntity task, TaskRuntime runtime) {
         Project project = ctx.project(task.getProjectId());
+
+        // 重跑支持:把上次终态失败的章节 Item 重新排队(成功的 Item 不受影响)
+        stageService.resetFailedItems(project.getId(), PipelineStageService.STAGE_SCRIPT);
 
         // 获取全部排队中的 SCRIPT Items(幂等:SUCCESS 的自动跳过)
         List<PipelineStageItem> items = stageService.getPendingItems(project.getId(), PipelineStageService.STAGE_SCRIPT);
@@ -79,52 +78,32 @@ public class ScriptTaskHandler implements TaskHandler {
             throw new BusinessException(400, "SCRIPT 阶段没有待处理的 Items(请先完成拆话)");
         }
 
-        int concurrency = Math.max(1, ctx.configService.getInt("task_page_concurrency", 5));
-        log.info("[script] 作品 {} SCRIPT 开始: {} 个 Items,并发 {}", project.getId(), items.size(), concurrency);
+        log.info("[script] 作品 {} SCRIPT 开始: {} 个 Items", project.getId(), items.size());
         runtime.begin(items.size());
         stageService.markRunning(project.getId(), PipelineStageService.STAGE_SCRIPT);
 
-        // 有控并发处理 Items
-        ExecutorService pool = Executors.newFixedThreadPool(Math.min(concurrency, items.size()));
-        try {
-            List<CompletableFuture<Void>> futures = new ArrayList<>();
-            for (PipelineStageItem item : items) {
-                futures.add(CompletableFuture.runAsync(() -> {
-                    try {
-                        runtime.checkStop();
-                        // 暂停感知
-                        if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_SCRIPT)) {
-                            return; // 暂停中,不处理新 Item
-                        }
-                        stageService.markItemRunning(item.getId());
-                        processOneChapter(project, item);
-                        stageService.markItemSuccess(item.getId());
-                        runtime.stepSuccess();
-                    } catch (TaskStopSignal s) {
-                        throw s;
-                    } catch (Exception e) {
-                        log.warn("[script] Item {} 处理失败: {}", item.getId(), e.getMessage());
-                        stageService.markItemFailed(item.getId(), e.getMessage());
-                        runtime.stepFail(e.getMessage());
-                    }
-                }, pool));
-            }
-            try {
-                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-            } catch (CompletionException ce) {
-                Throwable cause = ce.getCause() == null ? ce : ce.getCause();
-                if (cause instanceof TaskStopSignal signal) throw signal;
-                throw new BusinessException(502, "SCRIPT 批量处理失败: " + cause.getMessage());
-            }
-        } finally {
-            pool.shutdownNow();
+        // Phase 5.9 并发引擎:原子领取 + 单元失败重试 + 暂停/停止感知
+        imageStageRunner.run(project.getId(), PipelineStageService.STAGE_SCRIPT, runtime, item -> {
+            processOneChapter(project, item);
+            return "{\"chapterId\":" + item.getBusinessId() + "}";
+        });
+
+        // 暂停:阶段保持 PAUSED(pauseProject 已置),由恢复/继续重新入队
+        if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_SCRIPT)) {
+            log.info("[script] 作品 {} SCRIPT 暂停中,等待继续", project.getId());
+            return;
         }
 
-        // 全部 Item 处理完成 → 标记 SCRIPT Stage SUCCESS → 链式下一阶段
-        stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SCRIPT);
-        chainAfterScript(project);
-        log.info("[script] 作品 {} SCRIPT 完成: {}/{} 成功", project.getId(),
-                runtime.successCount(), items.size());
+        // 终态判定(以全量 Item 统计为准:单个失败已在 Runner 内自动重试)
+        PipelineStageService.StageItemStats stats = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_SCRIPT);
+        if (stats.failed() == 0) {
+            stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SCRIPT);
+            chainAfterScript(project);
+            log.info("[script] 作品 {} SCRIPT 完成: {}/{} 成功", project.getId(), stats.success(), stats.total());
+        } else {
+            stageService.markFailed(project.getId(), PipelineStageService.STAGE_SCRIPT,
+                    stats.failed() + "/" + stats.total() + " 个章节脚本生成失败,重跑 SCRIPT 任务可续作");
+        }
     }
 
     /** 处理单个章节 Item(生成脚本 + 写页 + upsert 角色) */

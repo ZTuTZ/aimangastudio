@@ -3,7 +3,6 @@ package com.aimanga.v2.pipeline;
 import com.aimanga.v2.model.PipelineStage;
 import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.repository.PipelineStageMapper;
-import com.aimanga.v2.repository.PipelineStageItemMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.RequiredArgsConstructor;
@@ -18,7 +17,8 @@ import java.util.List;
  * - 每个 (projectId, stageType) 只有一条记录(UNIQUE);
  * - Handler 开始时 markRunning,成功时 markSuccess,失败时 markFailed;
  * - 恢复时 isStageSuccess() 判断是否跳过已完成阶段;
- * - 暂停/继续:pauseProject / resumeProject。
+ * - 暂停/继续:pauseProject / resumeProject;
+ * - Phase 5.9:Item 原子领取(claim)/ 失败重试(retry)/ 孤儿回收 / 阶段进度统计。
  */
 @Slf4j
 @Service
@@ -34,7 +34,7 @@ public class PipelineStageService {
     public static final String STAGE_EXPORT = "EXPORT";
 
     private final PipelineStageMapper stageMapper;
-    private final PipelineStageItemMapper itemMapper;
+    private final com.aimanga.v2.repository.PipelineStageItemMapper itemMapper;
 
     /** 标记阶段开始(UPSERT:不存在则创建,存在则更新为进行中) */
     public void markRunning(Long projectId, String stageType) {
@@ -162,6 +162,112 @@ public class PipelineStageService {
         }
     }
 
+    // ---- Stage Item 并发领取与重试(Phase 5.9) ----
+
+    /**
+     * Item 原子领取:PENDING → RUNNING(数据库原子 UPDATE,影响行数=1 才算领取成功)。
+     * 多个 Worker 同时领取同一 Item 时只有一个成功,保证同一页/同一角色不被重复生成。
+     */
+    public boolean claimItem(Long itemId) {
+        return itemMapper.claim(itemId) == 1;
+    }
+
+    /** 释放领取(用户停止/暂停时把在跑 Item 归还为 PENDING,下次继续) */
+    public void releaseItem(Long itemId) {
+        itemMapper.release(itemId);
+    }
+
+    public PipelineStageItem getItem(Long itemId) {
+        return itemMapper.selectById(itemId);
+    }
+
+    /** Item 失败重试:FAILED 前先回到 PENDING 并累计 retry_count(由 Runner 判断是否超过 max_retry) */
+    public void markItemRetry(Long itemId, String error) {
+        itemMapper.update(null, new LambdaUpdateWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getId, itemId)
+                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING)
+                .set(PipelineStageItem::getErrorMessage, error == null ? "" : error.substring(0, Math.min(error.length(), 512)))
+                .setSql("retry_count = retry_count + 1"));
+    }
+
+    /** 标记 Item 成功(带结果引用 JSON) */
+    public void markItemSuccess(Long itemId, String resultRef) {
+        itemMapper.update(null, new LambdaUpdateWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getId, itemId)
+                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_SUCCESS)
+                .set(PipelineStageItem::getResultRef, resultRef));
+    }
+
+    /** 回收孤儿 RUNNING Items(进程崩溃/被杀残留)。任务层 claim_token+看门狗保证同一阶段同时只有一个 Runner,启动时重置安全。 */
+    public int resetRunningItems(Long projectId, String stageType) {
+        return itemMapper.update(null, new LambdaUpdateWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getProjectId, projectId)
+                .eq(PipelineStageItem::getStageType, stageType)
+                .eq(PipelineStageItem::getStatus, PipelineStageItem.STATUS_RUNNING)
+                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING));
+    }
+
+    /** 重跑支持:把终态 FAILED 的 Items 重新排队(重跑 SHEET/SCRIPT 任务时自动重试失败单元) */
+    public int resetFailedItems(Long projectId, String stageType) {
+        return itemMapper.update(null, new LambdaUpdateWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getProjectId, projectId)
+                .eq(PipelineStageItem::getStageType, stageType)
+                .eq(PipelineStageItem::getStatus, PipelineStageItem.STATUS_FAILED)
+                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING));
+    }
+
+    /** 精准重置:手动重生成指定业务单元时,把对应 Item 重置为排队(不影响其他失败单元) */
+    public int resetItemsByBusiness(Long projectId, String stageType, String businessType, List<Long> businessIds) {
+        if (businessIds == null || businessIds.isEmpty()) {
+            return 0;
+        }
+        return itemMapper.update(null, new LambdaUpdateWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getProjectId, projectId)
+                .eq(PipelineStageItem::getStageType, stageType)
+                .eq(PipelineStageItem::getBusinessType, businessType)
+                .in(PipelineStageItem::getBusinessId, businessIds)
+                .in(PipelineStageItem::getStatus, PipelineStageItem.STATUS_RUNNING, PipelineStageItem.STATUS_FAILED)
+                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING));
+    }
+
+    /** 清理孤儿 Items(业务单元已删除,如角色被手动移除),避免永久失败的僵尸 Item 卡住阶段 */
+    public int removeOrphanItems(Long projectId, String stageType, String businessType, List<Long> validBusinessIds) {
+        List<PipelineStageItem> items = itemMapper.selectList(new LambdaQueryWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getProjectId, projectId)
+                .eq(PipelineStageItem::getStageType, stageType)
+                .eq(PipelineStageItem::getBusinessType, businessType));
+        List<Long> orphans = items.stream()
+                .map(PipelineStageItem::getBusinessId)
+                .filter(id -> !validBusinessIds.contains(id))
+                .toList();
+        if (orphans.isEmpty()) {
+            return 0;
+        }
+        return itemMapper.deleteBatchIds(orphans);
+    }
+
+    /**
+     * 刷新阶段进度统计(Phase 5.9 §10):total_count/success_count/failed_count/progress,
+     * progress = success_count / total_count × 100。
+     */
+    public void updateStageProgress(Long projectId, String stageType) {
+        StageItemStats stats = getItemStats(projectId, stageType);
+        PipelineStage stage = stageMapper.selectOne(new LambdaQueryWrapper<PipelineStage>()
+                .eq(PipelineStage::getProjectId, projectId)
+                .eq(PipelineStage::getStageType, stageType));
+        if (stage == null) {
+            return;
+        }
+        PipelineStage patch = new PipelineStage();
+        patch.setId(stage.getId());
+        patch.setTotalCount((int) stats.total());
+        patch.setSuccessCount((int) stats.success());
+        patch.setFailedCount((int) stats.failed());
+        patch.setProgress(stats.total() == 0 ? 0 : (int) Math.min(100L, stats.success() * 100L / stats.total()));
+        patch.setUpdateTime(LocalDateTime.now());
+        stageMapper.updateById(patch);
+    }
+
     /** 查询指定阶段的所有排队中 Items */
     public List<PipelineStageItem> getPendingItems(Long projectId, String stageType) {
         return itemMapper.selectList(new LambdaQueryWrapper<PipelineStageItem>()
@@ -169,6 +275,11 @@ public class PipelineStageService {
                 .eq(PipelineStageItem::getStageType, stageType)
                 .eq(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING)
                 .orderByAsc(PipelineStageItem::getBusinessId));
+    }
+
+    /** 查询一批排队中 Item id(喂给 Worker 池的候选,按 business_id 升序) */
+    public List<Long> getPendingItemIds(Long projectId, String stageType, int limit) {
+        return itemMapper.selectPendingIds(projectId, stageType, limit);
     }
 
     /** 标记 Item 进行中 */
@@ -202,17 +313,24 @@ public class PipelineStageService {
         return pending == null || pending == 0;
     }
 
-    /** 查询阶段 Item 统计 */
+    /** 查询阶段 Item 统计(分组计数,不加载全量行) */
     public record StageItemStats(long total, long success, long failed, long pending) {}
 
     public StageItemStats getItemStats(Long projectId, String stageType) {
-        List<PipelineStageItem> items = itemMapper.selectList(new LambdaQueryWrapper<PipelineStageItem>()
-                .eq(PipelineStageItem::getProjectId, projectId)
-                .eq(PipelineStageItem::getStageType, stageType));
-        long total = items.size();
-        long success = items.stream().filter(i -> i.getStatus() == PipelineStageItem.STATUS_SUCCESS).count();
-        long failed = items.stream().filter(i -> i.getStatus() == PipelineStageItem.STATUS_FAILED).count();
-        long pending = total - success - failed;
-        return new StageItemStats(total, success, failed, pending);
+        long success = 0;
+        long failed = 0;
+        long running = 0;
+        long pending = 0;
+        for (java.util.Map<String, Object> row : itemMapper.selectStatusCounts(projectId, stageType)) {
+            int status = ((Number) row.get("status")).intValue();
+            long cnt = ((Number) row.get("cnt")).longValue();
+            switch (status) {
+                case PipelineStageItem.STATUS_SUCCESS -> success += cnt;
+                case PipelineStageItem.STATUS_FAILED -> failed += cnt;
+                case PipelineStageItem.STATUS_RUNNING -> running += cnt;
+                default -> pending += cnt;
+            }
+        }
+        return new StageItemStats(success + failed + running + pending, success, failed, running + pending);
     }
 }
