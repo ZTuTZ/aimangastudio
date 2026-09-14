@@ -121,8 +121,12 @@ public class ProjectController {
         List<String> pausedStages = stageService.pausedStageTypes(id);
         stageService.resumeProject(id);
         for (String stage : pausedStages) {
-            // 阶段类型 → 任务类型映射(REFERENCE 阶段对应 ASSET_REF 任务)
-            String taskType = "REFERENCE".equals(stage) ? "ASSET_REF" : stage;
+            // 阶段类型 → 任务类型映射(REFERENCE→ASSET_REF;IMAGE 阶段随 BATCH 任务恢复,幂等跳过已完成页)
+            String taskType = switch (stage) {
+                case "REFERENCE" -> "ASSET_REF";
+                case "IMAGE" -> "BATCH";
+                default -> stage;
+            };
             // enqueueUnique:已有活跃任务时静默跳过,不会产生第二个并行 Runner
             taskService.enqueueUnique(id, null, taskType, "{}");
         }
@@ -150,6 +154,48 @@ public class ProjectController {
     public Result<Integer> rebuildPageAssetRefs(@PathVariable Long id) {
         projectService.requireAccessible(id);
         return Result.ok(pageAssetBindingService.rebuildForProject(id));
+    }
+
+    /**
+     * 一键生成成品(BATCH,T6.3.4/6.3.5):
+     * 1 个 BATCH Task → Preflight → LAYOUT Stage → IMAGE Stage → 汇总。
+     * scope=CHAPTER 时按话去重,scope=PROJECT 时同项目只允许一个活跃 BATCH。
+     */
+    @PostMapping("/{id}/generate-batch")
+    public Result<TaskVO> generateBatch(@PathVariable Long id,
+                                        @RequestBody GenerateBatchRequest request) {
+        projectService.requireAccessible(id);
+        boolean scopeChapter = "CHAPTER".equals(request.scope());
+        Long chapterId = scopeChapter ? request.chapterId() : null;
+        if (scopeChapter && chapterId == null) {
+            throw new BusinessException(400, "按话生成必须提供 chapterId");
+        }
+        String payload;
+        try {
+            var mapper = com.fasterxml.jackson.databind.json.JsonMapper.builder().build();
+            var node = mapper.createObjectNode();
+            node.put("scope", scopeChapter ? "CHAPTER" : "PROJECT");
+            if (chapterId != null) node.put("chapterId", chapterId);
+            node.put("colorMode", request.colorMode() == null ? "" : request.colorMode());
+            node.put("skipGenerated", request.skipGenerated() == null || request.skipGenerated());
+            node.put("forceLayout", Boolean.TRUE.equals(request.forceLayout()));
+            node.put("forceImage", Boolean.TRUE.equals(request.forceImage()));
+            payload = mapper.writeValueAsString(node);
+        } catch (Exception e) {
+            throw new BusinessException(500, "构造任务参数失败");
+        }
+        // 同 (project, chapter, BATCH) 只允许一个活跃任务(T6.3.6 去重)
+        return Result.ok(taskService.ensureUniqueActiveTask(id, chapterId, "BATCH", payload));
+    }
+
+    /** BATCH 生成请求体 */
+    public record GenerateBatchRequest(
+            String scope,
+            Long chapterId,
+            String colorMode,
+            Boolean skipGenerated,
+            Boolean forceLayout,
+            Boolean forceImage) {
     }
 
     @PutMapping("/{id}")

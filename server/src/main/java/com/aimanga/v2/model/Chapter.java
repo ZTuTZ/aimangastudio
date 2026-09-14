@@ -15,6 +15,9 @@ public class Chapter {
     public static final int STATUS_PENDING = 0;
     public static final int STATUS_SCRIPT_RUNNING = 1;
     public static final int STATUS_SCRIPT_READY = 2;
+    public static final int STATUS_GENERATING = 3;
+    public static final int STATUS_COMPLETE = 4;
+    public static final int STATUS_PARTIAL_FAILED = 5;
 
     @TableId(type = IdType.AUTO)
     private Long id;
