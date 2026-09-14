@@ -5,6 +5,8 @@ import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.PageEntity;
 import com.aimanga.v2.model.Project;
 import com.aimanga.v2.repository.PageMapper;
+import com.aimanga.v2.model.GenerationRecord;
+import com.aimanga.v2.service.ConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -29,12 +31,15 @@ public class PostProcessService {
 
     private final PageMapper pageMapper;
     private final AiService aiService;
+    private final GenerationRecordService generationRecordService;
+    private final ConfigService configService;
 
     /**
      * 后处理单页:op = COLORIZE/CLEAN/REPAINT;
      * REPAINT 需要 repaintPrompt 与 maskUrl(遮罩图),其余只需要成品图存在。
      */
-    public String process(Project project, PageEntity page, String op, String repaintPrompt, String maskUrl, String colorMode) {
+    public String process(Project project, PageEntity page, String op, String repaintPrompt, String maskUrl,
+                          String colorMode, Long taskId) {
         if (page.getGeneratedImageUrl() == null || page.getGeneratedImageUrl().isBlank()) {
             throw new BusinessException(400, "页面 " + page.getPageNo() + " 还没有成品图,无法进行后处理");
         }
@@ -77,6 +82,9 @@ public class PostProcessService {
         patch.setImageScriptVersion(page.getScriptVersion() == null ? 1 : page.getScriptVersion());
         patch.setUpdateTime(LocalDateTime.now());
         pageMapper.updateById(patch);
+        generationRecordService.record(project.getId(), page.getChapterId(), page.getId(), taskId,
+                op, configService.getString("ai_merge_model"), prompt, images, input, url,
+                GenerationRecord.STATUS_SUCCESS, null);
         log.info("[post-process] 作品 {} 页#{} {} 完成: {}", project.getId(), page.getPageNo(), op, url);
         return url;
     }

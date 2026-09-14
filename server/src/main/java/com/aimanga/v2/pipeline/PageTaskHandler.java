@@ -62,7 +62,7 @@ public class PageTaskHandler implements TaskHandler {
                         throw new BusinessException(404, "页面不存在: " + item.getBusinessId());
                     }
                     return "{\"pageId\":" + page.getId() + ",\"image\":\""
-                            + pageGenerationService.processPage(project, page, colorMode, true)
+                            + pageGenerationService.processPage(project, page, colorMode, true, task.getId())
                             + "\"}";
                 }, stageRunner.imageEngine());
 

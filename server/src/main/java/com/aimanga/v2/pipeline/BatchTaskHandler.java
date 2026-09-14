@@ -96,7 +96,7 @@ public class BatchTaskHandler implements TaskHandler {
                 item -> {
                     PageEntity page = pageOf(item.getBusinessId());
                     return "{\"pageId\":" + page.getId() + ",\"layout\":\""
-                            + layoutGenerationService.processPage(project, page, PipelineStageService.isForceRequested(item))
+                            + layoutGenerationService.processPage(project, page, PipelineStageService.isForceRequested(item), task.getId())
                             + "\"}";
                 }, stageRunner.imageEngine());
         if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_LAYOUT)) {
@@ -113,7 +113,7 @@ public class BatchTaskHandler implements TaskHandler {
                     PageEntity page = pageOf(item.getBusinessId());
                     return "{\"pageId\":" + page.getId() + ",\"image\":\""
                             + pageGenerationService.processPage(project, page, colorMode,
-                                    PipelineStageService.isForceRequested(item))
+                                    PipelineStageService.isForceRequested(item), task.getId())
                             + "\"}";
                 }, stageRunner.imageEngine());
         if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_IMAGE)) {

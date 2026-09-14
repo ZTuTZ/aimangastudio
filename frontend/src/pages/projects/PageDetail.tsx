@@ -85,6 +85,11 @@ export function PageDetail() {
     onError: (e) => message.error(e instanceof Error ? e.message : '操作失败'),
   });
 
+  const { data: records } = useQuery({
+    queryKey: ['gen-records', pid],
+    queryFn: () => projectsApi.generationRecords(pid),
+  });
+
   const repaint = useMutation({
     mutationFn: () => projectsApi.repaintPage(pid, { repaintPrompt, maskUrl }),
     onError: (e) => message.error(e instanceof Error ? e.message : '操作失败'),
@@ -213,6 +218,27 @@ export function PageDetail() {
           </Card>
         </Col>
       </Row>
+
+      <Card size="small" title="生成记录">
+        {!records || records.length === 0 ? (
+          <Typography.Text type="secondary" className="text-sm">暂无生成记录</Typography.Text>
+        ) : (
+          <div className="flex flex-col gap-2 max-h-80 overflow-auto">
+            {records.map((r) => (
+              <div key={r.id} className="flex items-center gap-3 text-xs border-b border-gray-100 pb-1">
+                <Tag bordered={false} color={r.status === 'SUCCESS' ? 'default' : 'error'}>{r.kind}</Tag>
+                <Typography.Text type="secondary" className="shrink-0">{r.createTime}</Typography.Text>
+                {r.resultUrl && (
+                  <a href={r.resultUrl} target="_blank" rel="noreferrer" className="text-indigo-500 hover:underline">
+                    查看该次结果图
+                  </a>
+                )}
+                {r.error && <Typography.Text type="danger" ellipsis>{r.error}</Typography.Text>}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
 
       <Modal
         open={repaintOpen}

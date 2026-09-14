@@ -5,6 +5,7 @@ import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.PageEntity;
 import com.aimanga.v2.model.Project;
 import com.aimanga.v2.repository.PageMapper;
+import com.aimanga.v2.service.ConfigService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -37,11 +38,13 @@ public class PageGenerationService {
     private final PageReferenceResolver referenceResolver;
     private final PagePromptCompiler promptCompiler;
     private final AiService aiService;
+    private final GenerationRecordService generationRecordService;
+    private final ConfigService configService;
     private final ObjectMapper objectMapper;
 
     /** 处理单页成品:返回成品图 URL;force=用户强制重生成时跳过幂等。
      *  T6.5.4:已有成品图但脚本版本更新(imageScriptVersion < scriptVersion)视为过期,不删旧图,直接重画。 */
-    public String processPage(Project project, PageEntity page, String colorMode, boolean force) {
+    public String processPage(Project project, PageEntity page, String colorMode, boolean force, Long taskId) {
         boolean fresh = page.getGeneratedImageUrl() != null && !page.getGeneratedImageUrl().isBlank()
                 && page.getImageScriptVersion() != null
                 && page.getImageScriptVersion().equals(orOne(page.getScriptVersion()));

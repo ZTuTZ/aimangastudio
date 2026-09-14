@@ -64,7 +64,7 @@ public class LayoutTaskHandler implements TaskHandler {
         runtime.begin((int) before.pending());
 
         stageRunner.run(project.getId(), PipelineStageService.STAGE_LAYOUT, runtime,
-                item -> processOnePage(project, item), stageRunner.imageEngine());
+                item -> processOnePage(project, item, task.getId()), stageRunner.imageEngine());
 
         if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_LAYOUT)) {
             log.info("[layout] 作品 {} LAYOUT 暂停中,等待继续", project.getId());
@@ -83,10 +83,10 @@ public class LayoutTaskHandler implements TaskHandler {
     }
 
     /** 单页处理(Item → 布局图);force 标记由 forceResetItemsByBusiness 写入 */
-    private String processOnePage(Project project, PipelineStageItem item) {
+    private String processOnePage(Project project, PipelineStageItem item, Long taskId) {
         PageEntity page = layoutGenerationService.page(item.getBusinessId());
         boolean force = PipelineStageService.isForceRequested(item);
-        String url = layoutGenerationService.processPage(project, page, force);
+        String url = layoutGenerationService.processPage(project, page, force, taskId);
         return "{\"pageId\":" + page.getId() + ",\"layoutImageUrl\":\"" + url + "\"}";
     }
 

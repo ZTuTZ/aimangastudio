@@ -5,6 +5,8 @@ import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.PageEntity;
 import com.aimanga.v2.model.Project;
 import com.aimanga.v2.repository.PageMapper;
+import com.aimanga.v2.model.GenerationRecord;
+import com.aimanga.v2.service.ConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -30,10 +32,12 @@ public class LayoutGenerationService {
     private final PageReferenceResolver referenceResolver;
     private final PagePromptCompiler promptCompiler;
     private final AiService aiService;
+    private final GenerationRecordService generationRecordService;
+    private final ConfigService configService;
 
     /** 处理单页布局:返回布局图 URL;force=用户强制重布局时跳过幂等检查。
      *  T6.5.4:已有布局图但脚本版本已更新(layoutScriptVersion < scriptVersion)视为过期,自动重画。 */
-    public String processPage(Project project, PageEntity page, boolean force) {
+    public String processPage(Project project, PageEntity page, boolean force, Long taskId) {
         boolean fresh = page.getLayoutImageUrl() != null && !page.getLayoutImageUrl().isBlank()
                 && page.getLayoutScriptVersion() != null
                 && page.getLayoutScriptVersion().equals(orOne(page.getScriptVersion()));
@@ -52,6 +56,9 @@ public class LayoutGenerationService {
         patch.setLayoutScriptVersion(orOne(page.getScriptVersion()));
         patch.setUpdateTime(LocalDateTime.now());
         pageMapper.updateById(patch);
+        generationRecordService.record(project.getId(), page.getChapterId(), page.getId(), taskId,
+                GenerationRecord.KIND_LAYOUT, configService.getString("ai_image_model"), prompt,
+                refs.imageUrls(), null, url, GenerationRecord.STATUS_SUCCESS, null);
         log.info("[layout] 作品 {} 页#{} 布局图已生成: {}", project.getId(), page.getPageNo(), url);
         return url;
     }

@@ -205,3 +205,25 @@ CREATE TABLE IF NOT EXISTS `page_asset_ref` (
   CONSTRAINT `fk_par_page` FOREIGN KEY (`page_id`) REFERENCES `page` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_par_asset` FOREIGN KEY (`asset_id`) REFERENCES `asset` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='页-资产素材绑定';
+
+-- AI 生成记录(Phase 6.7:回溯/对比/排查/恢复历史版本)
+CREATE TABLE IF NOT EXISTS `generation_record` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `project_id` BIGINT UNSIGNED NOT NULL,
+  `chapter_id` BIGINT UNSIGNED DEFAULT NULL,
+  `page_id` BIGINT UNSIGNED DEFAULT NULL,
+  `task_id` BIGINT UNSIGNED DEFAULT NULL,
+  `kind` VARCHAR(32) NOT NULL COMMENT 'LAYOUT/PAGE/COLORIZE/CLEAN/REPAINT',
+  `model` VARCHAR(128) DEFAULT '',
+  `prompt` TEXT,
+  `reference_urls` JSON COMMENT '参考图 URL 数组',
+  `input_url` VARCHAR(512) DEFAULT NULL COMMENT '输入图(后处理为原图)',
+  `result_url` VARCHAR(512) DEFAULT NULL,
+  `status` VARCHAR(16) NOT NULL DEFAULT 'SUCCESS' COMMENT 'SUCCESS/FAILED',
+  `error` VARCHAR(512) DEFAULT '',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_gr_page` (`page_id`),
+  KEY `idx_gr_project_kind` (`project_id`, `kind`),
+  CONSTRAINT `fk_gr_project` FOREIGN KEY (`project_id`) REFERENCES `project` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 生成记录';

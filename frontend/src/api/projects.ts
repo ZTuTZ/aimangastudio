@@ -189,6 +189,7 @@ export const projectsApi = {
   cleanPage: (id: number) => unwrap<TaskVO>(http.post(`/pages/${id}/clean`)),
   repaintPage: (id: number, data: { repaintPrompt: string; maskUrl: string }) =>
     unwrap<TaskVO>(http.post(`/pages/${id}/repaint`, data)),
+  generationRecords: (id: number) => unwrap<GenerationRecordVO[]>(http.get(`/pages/${id}/generation-records`)),
   assets: (projectId: number) => unwrap<AssetVO[]>(http.get(`/projects/${projectId}/assets`)),
   createAsset: (projectId: number, data: AssetPayload) =>
     unwrap<AssetVO>(http.post(`/projects/${projectId}/assets`, data)),
@@ -264,4 +265,18 @@ export interface PipelineStageVO {
   error: string | null;
   startTime: string | null;
   finishTime: string | null;
+}
+
+/** AI 生成记录(Phase 6.7) */
+export interface GenerationRecordVO {
+  id: number;
+  kind: string;
+  model: string;
+  prompt: string | null;
+  referenceUrls: string | null;
+  inputUrl: string | null;
+  resultUrl: string | null;
+  status: string;
+  error: string | null;
+  createTime: string;
 }

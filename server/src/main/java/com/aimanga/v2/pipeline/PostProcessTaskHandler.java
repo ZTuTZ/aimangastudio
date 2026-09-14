@@ -57,7 +57,7 @@ public abstract class PostProcessTaskHandler implements TaskHandler {
                     String url = postProcessService.process(project, page, op(),
                             parseString(task.getPayload(), "repaintPrompt"),
                             parseString(task.getPayload(), "maskUrl"),
-                            parseString(task.getPayload(), "colorMode"));
+                            parseString(task.getPayload(), "colorMode"), task.getId());
                     return "{\"pageId\":" + page.getId() + ",\"url\":\"" + url + "\"}";
                 }, stageRunner.imageEngine());
 

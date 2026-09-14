@@ -27,6 +27,7 @@ public class PageController {
     private final PageService pageService;
     private final TaskService taskService;
     private final PipelineStageService stageService;
+    private final com.aimanga.v2.pipeline.GenerationRecordService generationRecordService;
 
     @GetMapping("/pages/{id}")
     public Result<PageVO> get(@PathVariable Long id) {
@@ -78,6 +79,13 @@ public class PageController {
                 ? "" : request.colorMode();
         return Result.ok(taskService.ensureUniqueActiveTask(page.getProjectId(), page.getChapterId(), "PAGE",
                 "{\"pageId\":" + id + ",\"colorMode\":\"" + colorMode + "\"}"));
+    }
+
+    /** 页生成记录(Phase 6.7:回溯/对比/排查) */
+    @GetMapping("/pages/{id}/generation-records")
+    public Result<List<com.aimanga.v2.model.GenerationRecord>> generationRecords(@PathVariable Long id) {
+        pageService.requireAccessible(id);
+        return Result.ok(generationRecordService.recordsOfPage(id));
     }
 
     /** 单页上色(T6.6.1) */
