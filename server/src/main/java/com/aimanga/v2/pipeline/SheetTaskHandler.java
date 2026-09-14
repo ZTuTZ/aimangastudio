@@ -55,13 +55,18 @@ public class SheetTaskHandler implements TaskHandler {
         } else {
             syncAllAssets(project);
         }
+        // 回收上次进程崩溃残留的 RUNNING Item(与 Runner 内部回收幂等)
+        stageService.resetRunningItems(project.getId(), PipelineStageService.STAGE_SHEET);
 
-        long total = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_SHEET).total();
-        if (total == 0) {
+        PipelineStageService.StageItemStats before = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_SHEET);
+        if (before.total() == 0 || before.pending() == 0) {
+            // 没有角色,或全部已完成(重试续作场景)→ 直接完成
             stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SHEET);
             advanceProject(project);
             return;
         }
+        // 任务进度 = 本次要处理的数量(排队 + 失败重置,不含已完成/成功跳过的)
+        runtime.begin((int) before.pending());
 
         // 手动重生成:强制重画;全量跑:幂等跳过已完成的
         boolean forceRegen = assetId != null;

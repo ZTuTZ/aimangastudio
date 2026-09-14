@@ -61,8 +61,9 @@ public class ScriptTaskHandler implements TaskHandler {
     public void run(TaskEntity task, TaskRuntime runtime) {
         Project project = ctx.project(task.getProjectId());
 
-        // 重跑支持:把上次终态失败的章节 Item 重新排队(成功的 Item 不受影响)
+        // 重跑支持:把上次终态失败的章节 Item 重新排队(成功的 Item 不受影响);回收崩溃残留的 RUNNING
         stageService.resetFailedItems(project.getId(), PipelineStageService.STAGE_SCRIPT);
+        stageService.resetRunningItems(project.getId(), PipelineStageService.STAGE_SCRIPT);
 
         // 获取全部排队中的 SCRIPT Items(幂等:SUCCESS 的自动跳过)
         List<PipelineStageItem> items = stageService.getPendingItems(project.getId(), PipelineStageService.STAGE_SCRIPT);
