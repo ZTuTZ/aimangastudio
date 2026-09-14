@@ -34,7 +34,7 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
 
     /** MOCK 为系统测试类型:验证任务系统本身;真实业务类型处理器在 Phase 5/6 提供 */
     public static final Set<String> TYPES = Set.of(
-            "SPLIT", "SCRIPT", "ASSET", "SHEET", "BATCH", "PAGE", "LAYOUT", "COLORIZE", "CLEAN", "REPAINT", "MOCK");
+            "SPLIT", "SCRIPT", "ASSET", "SHEET", "ASSET_REF", "BATCH", "PAGE", "LAYOUT", "COLORIZE", "CLEAN", "REPAINT", "MOCK");
 
     private static final Set<String> NEEDS_PAGE = Set.of("PAGE", "LAYOUT", "COLORIZE", "CLEAN", "REPAINT");
 
