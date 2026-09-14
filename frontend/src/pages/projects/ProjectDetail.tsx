@@ -3,7 +3,7 @@ import { ArrowLeftOutlined, EditOutlined, FileImageOutlined, PlusOutlined, Reloa
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { GenerationPreflightTab } from '@/components/GenerationPreflightTab';
+import { GenerationWorkbench } from '@/components/GenerationWorkbench';
 import {
   ASSET_TYPE_NAMES,
   CATEGORY_SUGGESTIONS,
@@ -156,8 +156,10 @@ export function ProjectDetail() {
               key: 'generate',
               label: '生成成品',
               children: (
-                <GenerationPreflightTab
+                <GenerationWorkbench
                   projectId={projectId}
+                  project={project}
+                  chapters={chapters ?? []}
                   onGoAssets={() => setTabKey('assets')}
                 />
               ),

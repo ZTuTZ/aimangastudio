@@ -153,6 +153,18 @@ export const projectsApi = {
     unwrap<PreflightResult>(http.get(`/projects/${projectId}/generation-preflight`, { params: chapterId ? { chapterId } : {} })),
   rebuildPageAssetRefs: (projectId: number) =>
     unwrap<number>(http.post(`/projects/${projectId}/page-asset-refs/rebuild`)),
+  pipelineStages: (projectId: number) =>
+    unwrap<PipelineStageVO[]>(http.get(`/projects/${projectId}/pipeline`)),
+  generateBatch: (projectId: number, data: {
+    scope: 'PROJECT' | 'CHAPTER';
+    chapterId?: number;
+    colorMode?: string;
+    skipGenerated?: boolean;
+    forceLayout?: boolean;
+    forceImage?: boolean;
+  }) => unwrap<TaskVO>(http.post(`/projects/${projectId}/generate-batch`, data)),
+  pausePipeline: (projectId: number) => unwrap<void>(http.post(`/projects/${projectId}/pause`)),
+  resumePipeline: (projectId: number) => unwrap<void>(http.post(`/projects/${projectId}/resume`)),
   /** 批量生成勾选资产素材图:角色→设定表,场景/道具/服装→参考图(混选时可能返回多个任务) */
   generateForAssets: (projectId: number, assetIds: number[]) =>
     unwrap<TaskVO[]>(http.post(`/projects/${projectId}/assets/generate`, { assetIds })),
@@ -224,4 +236,19 @@ export interface PreflightResult {
   optionalMissingAssets: PreflightAsset[];
   stats: PreflightTypeStat[];
   warnings: string[];
+}
+
+/** 流水线阶段进度(含 Phase 5.9/6 的 Item 统计) */
+export interface PipelineStageVO {
+  id: number;
+  projectId: number;
+  stageType: string;
+  status: number; // 0排队 1进行中 2成功 3失败 4暂停 5停止
+  progress: number;
+  totalCount: number | null;
+  successCount: number | null;
+  failedCount: number | null;
+  error: string | null;
+  startTime: string | null;
+  finishTime: string | null;
 }
