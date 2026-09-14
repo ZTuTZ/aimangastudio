@@ -1,5 +1,5 @@
-import { App, AutoComplete, Button, Card, Form, Input, Modal, Popconfirm, Segmented, Select, Space, Table, Tabs, Tag, Tooltip, Typography, Upload } from 'antd';
-import { ArrowLeftOutlined, EditOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
+import { App, AutoComplete, Button, Card, Form, Image, Input, Modal, Popconfirm, Segmented, Select, Space, Table, Tabs, Tag, Tooltip, Typography, Upload } from 'antd';
+import { ArrowLeftOutlined, EditOutlined, FileImageOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -614,37 +614,63 @@ function AssetsTab({ projectId, assets, category, onCategoryChange, onEdit, onAd
           暂无{ASSET_TYPE_NAMES[category]}资产 —— 第一步流水线会自动从脚本中提取(Phase 5)
         </Typography.Text>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {list.map((asset) => (
-            <div key={asset.id} className="p-3 rounded-xl border border-gray-200 bg-white hover:border-indigo-400 hover:shadow-sm transition">
-              <div className="flex items-center gap-2">
-                <Typography.Text strong ellipsis className="flex-1">
-                  {asset.name}
-                </Typography.Text>
-                {asset.assetType === 1 && (
-                  asset.genStatus === 1 ? (
-                    <Tag color="processing" bordered={false} style={{ marginRight: 0 }}>生成中</Tag>
-                  ) : asset.sheetImageUrl ? (
-                    <Tag color="green" bordered={false} style={{ marginRight: 0 }}>已有设定表</Tag>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+          {list.map((asset) => {
+            // 图片来源优先级:角色设定表 > 参考图;点击可放大预览
+            const imageUrl = asset.sheetImageUrl || asset.referenceUrl || '';
+            const generating = asset.assetType === 1 && asset.genStatus === 1;
+            return (
+              <div key={asset.id} className="p-2 rounded-xl border border-gray-200 bg-white hover:border-indigo-400 hover:shadow-sm transition flex flex-col">
+                <div className="relative rounded-lg overflow-hidden bg-gray-50 aspect-[3/4] flex items-center justify-center">
+                  {imageUrl ? (
+                    <Image
+                      src={imageUrl}
+                      alt={asset.name}
+                      className="w-full h-full object-cover"
+                      wrapperClassName="w-full h-full"
+                    />
                   ) : (
+                    <div className="flex flex-col items-center gap-1 text-gray-300">
+                      <FileImageOutlined className="text-3xl" />
+                      <span className="text-xs">{generating ? '设定表生成中…' : '暂无图片'}</span>
+                    </div>
+                  )}
+                  {generating && (
+                    <div className="absolute inset-0 bg-white/60 flex items-center justify-center">
+                      <Tag color="processing" bordered={false}>生成中</Tag>
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 mt-2">
+                  <Typography.Text strong ellipsis className="flex-1" title={asset.name}>
+                    {asset.name}
+                  </Typography.Text>
+                  {asset.assetType === 1 && !generating && !asset.sheetImageUrl && (
                     <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => genSheet(asset)}>
                       生成设定表
                     </Button>
-                  )
+                  )}
+                  {asset.assetType === 1 && asset.sheetImageUrl && !generating && (
+                    <Tooltip title="重新生成设定表">
+                      <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => genSheet(asset)}>
+                        重生成
+                      </Button>
+                    </Tooltip>
+                  )}
+                </div>
+                {asset.description && (
+                  <Typography.Paragraph type="secondary" className="mt-1 mb-2 text-xs" ellipsis={{ rows: 2, tooltip: asset.description }}>
+                    {asset.description}
+                  </Typography.Paragraph>
                 )}
+                <div className="mt-auto text-right">
+                  <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => onEdit(asset)}>
+                    编辑
+                  </Button>
+                </div>
               </div>
-              {asset.description && (
-                <Typography.Paragraph type="secondary" className="mt-1 mb-0 text-xs" ellipsis={{ rows: 2, tooltip: asset.description }}>
-                  {asset.description}
-                </Typography.Paragraph>
-              )}
-              <div className="mt-2 text-right">
-                <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => onEdit(asset)}>
-                  编辑
-                </Button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -872,8 +898,27 @@ function AssetEditModal({
         >
           <Input.TextArea rows={3} placeholder='{"role":"男主","age":"18","hair":"黑色短发"}' />
         </Form.Item>
-        <Form.Item name="referenceUrl" label="参考图 URL(可先经 系统配置→文件上传 获取)">
-          <Input placeholder="https://…" />
+        <Form.Item noStyle shouldUpdate={(prev, cur) => prev.referenceUrl !== cur.referenceUrl}>
+          {({ getFieldValue }) => {
+            const refUrl = (getFieldValue('referenceUrl') ?? '').trim();
+            return (
+              <Form.Item name="referenceUrl" label="参考图 URL(可先经 系统配置→文件上传 获取)">
+                <Space.Compact className="w-full">
+                  <Input placeholder="https://…" />
+                  {refUrl && (
+                    <Image
+                      src={refUrl}
+                      alt="参考图"
+                      width={64}
+                      height={64}
+                      className="rounded object-cover"
+                      style={{ alignSelf: 'center', marginLeft: 8 }}
+                    />
+                  )}
+                </Space.Compact>
+              </Form.Item>
+            );
+          }}
         </Form.Item>
       </Form>
     </Modal>
