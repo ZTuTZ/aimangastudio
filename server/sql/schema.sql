@@ -186,3 +186,22 @@ CREATE TABLE IF NOT EXISTS `pipeline_stage_item` (
   UNIQUE KEY `uk_item` (`project_id`, `stage_type`, `business_type`, `business_id`),
   KEY `idx_item_status` (`project_id`, `stage_type`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='流水线阶段执行单元';
+
+-- 页-资产素材绑定(Phase 6.1:每页明确引用哪些角色/场景/道具/服装,出图预检与一致性参考的依据)
+CREATE TABLE IF NOT EXISTS `page_asset_ref` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `project_id` BIGINT UNSIGNED NOT NULL,
+  `page_id` BIGINT UNSIGNED NOT NULL,
+  `asset_id` BIGINT UNSIGNED NOT NULL,
+  `required_flag` TINYINT NOT NULL DEFAULT 0 COMMENT '1必需(角色) 0可选(场景/道具/服装)',
+  `source` VARCHAR(16) NOT NULL DEFAULT 'MATCH' COMMENT 'AI模型返回/MATCH程序匹配/MANUAL人工',
+  `sort_order` INT NOT NULL DEFAULT 0,
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_page_asset` (`page_id`, `asset_id`),
+  KEY `idx_par_project_page` (`project_id`, `page_id`),
+  KEY `idx_par_asset` (`asset_id`),
+  CONSTRAINT `fk_par_page` FOREIGN KEY (`page_id`) REFERENCES `page` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_par_asset` FOREIGN KEY (`asset_id`) REFERENCES `asset` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='页-资产素材绑定';

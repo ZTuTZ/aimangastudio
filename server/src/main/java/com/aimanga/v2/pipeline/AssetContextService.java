@@ -74,7 +74,7 @@ public class AssetContextService {
     }
 
     private String characterLine(Asset asset) {
-        StringBuilder sb = new StringBuilder("- [角色] ").append(asset.getName());
+        StringBuilder sb = new StringBuilder("- [角色#").append(asset.getId()).append("] ").append(asset.getName());
         List<String> aliases = parseAliases(asset.getAliases());
         if (!aliases.isEmpty()) {
             sb.append("(又名:").append(String.join("/", aliases)).append(")");
@@ -92,7 +92,7 @@ public class AssetContextService {
     private String otherLine(Asset asset) {
         String type = asset.getAssetType() == Asset.TYPE_SCENE ? "场景"
                 : asset.getAssetType() == Asset.TYPE_PROP ? "道具" : "服装";
-        StringBuilder sb = new StringBuilder("- [").append(type).append("] ").append(asset.getName());
+        StringBuilder sb = new StringBuilder("- [").append(type).append("#").append(asset.getId()).append("] ").append(asset.getName());
         if (asset.getDescription() != null && !asset.getDescription().isBlank()) {
             sb.append(" | ").append(clip(asset.getDescription(), 120));
         }

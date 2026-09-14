@@ -10,6 +10,8 @@ import com.aimanga.v2.dto.TaskVO;
 import com.aimanga.v2.dto.UpdateProjectRequest;
 import com.aimanga.v2.model.PipelineStage;
 import com.aimanga.v2.model.Project;
+import com.aimanga.v2.pipeline.GenerationPreflightService;
+import com.aimanga.v2.pipeline.PageAssetBindingService;
 import com.aimanga.v2.pipeline.PipelineStageService;
 import com.aimanga.v2.service.ImportService;
 import com.aimanga.v2.service.ProjectService;
@@ -37,6 +39,8 @@ public class ProjectController {
     private final ImportService importService;
     private final com.aimanga.v2.service.TaskService taskService;
     private final PipelineStageService stageService;
+    private final GenerationPreflightService generationPreflightService;
+    private final PageAssetBindingService pageAssetBindingService;
 
     @GetMapping
     public Result<PageResult<ProjectVO>> list(
@@ -130,6 +134,22 @@ public class ProjectController {
     public Result<List<PipelineStage>> pipeline(@PathVariable Long id) {
         projectService.requireAccessible(id);
         return Result.ok(stageService.listByProject(id));
+    }
+
+    /** 出图素材预检(T6.1.4):chapterId 为空 = 整部作品 */
+    @GetMapping("/{id}/generation-preflight")
+    public Result<com.aimanga.v2.pipeline.GenerationPreflightService.PreflightResult> generationPreflight(
+            @PathVariable Long id,
+            @RequestParam(required = false) Long chapterId) {
+        projectService.requireAccessible(id);
+        return Result.ok(generationPreflightService.preflight(id, chapterId));
+    }
+
+    /** 重建页-素材绑定(T6.1.3 兼容旧脚本页:按现有对白/visual/场景描述程序匹配) */
+    @PostMapping("/{id}/page-asset-refs/rebuild")
+    public Result<Integer> rebuildPageAssetRefs(@PathVariable Long id) {
+        projectService.requireAccessible(id);
+        return Result.ok(pageAssetBindingService.rebuildForProject(id));
     }
 
     @PutMapping("/{id}")

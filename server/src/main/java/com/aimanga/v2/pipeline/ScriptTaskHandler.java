@@ -50,6 +50,7 @@ public class ScriptTaskHandler implements TaskHandler {
     private final AssetContextService assetContextService;
     private final PipelineStageService stageService;
     private final ConcurrentStageRunner stageRunner;
+    private final PageAssetBindingService pageAssetBindingService;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -149,8 +150,14 @@ public class ScriptTaskHandler implements TaskHandler {
                 "text", numbered));
         StoryScript script = executeWithRetry(prompt, unitCount, p.getId());
 
-        // 写页(重建该话全部页)
-        writePages(p.getId(), chapter.getId(), script);
+        // 写页(重建该话全部页)并按页写入素材绑定(T6.1.3:AI assetIds 校验过滤 + Java 匹配补充)
+        List<PageEntity> writtenPages = writePages(p.getId(), chapter.getId(), script);
+        List<Asset> projectAssets = ctx.assetMapper.selectList(new LambdaQueryWrapper<Asset>()
+                .eq(Asset::getProjectId, p.getId()));
+        for (int i = 0; i < writtenPages.size() && i < script.pages().size(); i++) {
+            List<Long> aiIds = script.pages().get(i).assetIds();
+            pageAssetBindingService.bindPage(writtenPages.get(i), projectAssets, aiIds == null ? List.of() : aiIds);
+        }
 
         // 角色 upsert
         upsertCharacters(p.getId(), script);
@@ -272,13 +279,13 @@ public class ScriptTaskHandler implements TaskHandler {
             if (i == sorted.size() - 1) end = Math.max(end, unitCount);
             if (end > unitCount) end = unitCount;
             if (start > end) return script;
-            repaired.add(new StoryScript.PageItem(item.page(), start, end, item.narration(), item.dialogue(), item.visual()));
+            repaired.add(new StoryScript.PageItem(item.page(), start, end, item.narration(), item.dialogue(), item.visual(), item.assetIds()));
             expected = end + 1;
         }
         if (repaired.get(repaired.size() - 1).sourceEndUnit() != unitCount) {
             StoryScript.PageItem lastItem = repaired.get(repaired.size() - 1);
             repaired.set(repaired.size() - 1, new StoryScript.PageItem(lastItem.page(),
-                    lastItem.sourceStartUnit(), unitCount, lastItem.narration(), lastItem.dialogue(), lastItem.visual()));
+                    lastItem.sourceStartUnit(), unitCount, lastItem.narration(), lastItem.dialogue(), lastItem.visual(), lastItem.assetIds()));
         }
         return new StoryScript(script.summary(), script.objective(), script.requirements(),
                 script.characters(), repaired, script.tagline());
@@ -316,19 +323,20 @@ public class ScriptTaskHandler implements TaskHandler {
                 }
             }
             pages.add(new StoryScript.PageItem(item.page(), item.sourceStartUnit(), item.sourceEndUnit(),
-                    narration, dialogue, item.visual()));
+                    narration, dialogue, item.visual(), item.assetIds()));
         }
         return new StoryScript(script.summary(), script.objective(), script.requirements(),
                 script.characters(), pages, script.tagline());
     }
 
-    /** 写页(重建该话全部页) */
-    private void writePages(Long projectId, Long chapterId, StoryScript script) {
+    /** 写页(重建该话全部页),返回写入的页(T6.1.3 用于逐页写素材绑定;旧页删除时 page_asset_ref 经 FK 级联清理) */
+    private List<PageEntity> writePages(Long projectId, Long chapterId, StoryScript script) {
         List<PageEntity> existing = ctx.pageMapper.selectList(new LambdaQueryWrapper<PageEntity>()
                 .eq(PageEntity::getChapterId, chapterId));
         for (PageEntity page : existing) {
             ctx.pageMapper.deleteById(page.getId());
         }
+        List<PageEntity> written = new ArrayList<>();
         List<StoryScript.PageItem> pages = script.pages();
         for (int i = 0; i < pages.size(); i++) {
             StoryScript.PageItem item = pages.get(i);
@@ -358,7 +366,9 @@ public class ScriptTaskHandler implements TaskHandler {
             page.setGenerateRecords("[]");
             page.setCreateTime(LocalDateTime.now());
             ctx.pageMapper.insert(page);
+            written.add(page);
         }
+        return written;
     }
 
     /** 角色 upsert(canonical name/aliases 命中不建第二卡;只补缺失字段) */

@@ -31,7 +31,9 @@ public record StoryScript(
             Integer sourceEndUnit,
             String narration,
             List<DialogueItem> dialogue,
-            String visual) {
+            String visual,
+            /** 本页引用的资产 ID(T6.1.3:AI 返回,非法 ID 由程序过滤,Java 匹配器再补充) */
+            List<Long> assetIds) {
     }
 
     public record DialogueItem(String speaker, String line) {

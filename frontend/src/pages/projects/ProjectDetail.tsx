@@ -3,7 +3,7 @@ import { ArrowLeftOutlined, EditOutlined, FileImageOutlined, PlusOutlined, Reloa
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ComingSoon } from '@/components/ComingSoon';
+import { GenerationPreflightTab } from '@/components/GenerationPreflightTab';
 import {
   ASSET_TYPE_NAMES,
   CATEGORY_SUGGESTIONS,
@@ -29,6 +29,7 @@ export function ProjectDetail() {
   const [chapterModal, setChapterModal] = useState<{ open: boolean; chapter?: ChapterVO }>({ open: false });
   const [assetModal, setAssetModal] = useState<{ open: boolean; asset?: AssetVO }>({ open: false });
   const [assetCategory, setAssetCategory] = useState<number>(1); // 默认展示「角色」
+  const [tabKey, setTabKey] = useState<string>('chapters');
   const [infoModalOpen, setInfoModalOpen] = useState(false);
 
   if (!project) {
@@ -120,6 +121,8 @@ export function ProjectDetail() {
       {/* 三个工作区改为 Tab */}
       <Card styles={{ body: { paddingTop: 4 } }}>
         <Tabs
+          activeKey={tabKey}
+          onChange={setTabKey}
           defaultActiveKey="chapters"
           items={[
             {
@@ -152,7 +155,12 @@ export function ProjectDetail() {
             {
               key: 'generate',
               label: '生成成品',
-              children: <ComingSoon title="" items={['选择范围(整部剧/按话)与色彩模式,一键生成成品页(Phase 6)']} />,
+              children: (
+                <GenerationPreflightTab
+                  projectId={projectId}
+                  onGoAssets={() => setTabKey('assets')}
+                />
+              ),
             },
           ]}
         />
