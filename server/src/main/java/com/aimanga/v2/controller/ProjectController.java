@@ -140,12 +140,16 @@ public class ProjectController {
         return Result.ok(stageService.listByProject(id));
     }
 
-    /** 出图素材预检(T6.1.4):chapterId 为空 = 整部作品 */
+    /** 出图素材预检(T6.1.4):chapterId 为空 = 整部作品;chapterIds = 话集合(多话批量) */
     @GetMapping("/{id}/generation-preflight")
     public Result<com.aimanga.v2.pipeline.GenerationPreflightService.PreflightResult> generationPreflight(
             @PathVariable Long id,
-            @RequestParam(required = false) Long chapterId) {
+            @RequestParam(required = false) Long chapterId,
+            @RequestParam(required = false) List<Long> chapterIds) {
         projectService.requireAccessible(id);
+        if (chapterIds != null && !chapterIds.isEmpty()) {
+            return Result.ok(generationPreflightService.preflight(id, chapterIds));
+        }
         return Result.ok(generationPreflightService.preflight(id, chapterId));
     }
 
@@ -166,16 +170,25 @@ public class ProjectController {
                                         @RequestBody GenerateBatchRequest request) {
         projectService.requireAccessible(id);
         boolean scopeChapter = "CHAPTER".equals(request.scope());
+        boolean scopeChapters = "CHAPTERS".equals(request.scope());
         Long chapterId = scopeChapter ? request.chapterId() : null;
+        List<Long> chapterIds = scopeChapters ? request.chapterIds() : null;
         if (scopeChapter && chapterId == null) {
             throw new BusinessException(400, "按话生成必须提供 chapterId");
+        }
+        if (scopeChapters && (chapterIds == null || chapterIds.isEmpty())) {
+            throw new BusinessException(400, "多话生成必须提供 chapterIds");
         }
         String payload;
         try {
             var mapper = com.fasterxml.jackson.databind.json.JsonMapper.builder().build();
             var node = mapper.createObjectNode();
-            node.put("scope", scopeChapter ? "CHAPTER" : "PROJECT");
+            node.put("scope", scopeChapter ? "CHAPTER" : scopeChapters ? "CHAPTERS" : "PROJECT");
             if (chapterId != null) node.put("chapterId", chapterId);
+            if (scopeChapters) {
+                var arr = node.putArray("chapterIds");
+                chapterIds.forEach(arr::add);
+            }
             node.put("colorMode", request.colorMode() == null ? "" : request.colorMode());
             node.put("skipGenerated", request.skipGenerated() == null || request.skipGenerated());
             node.put("forceLayout", Boolean.TRUE.equals(request.forceLayout()));
@@ -184,7 +197,7 @@ public class ProjectController {
         } catch (Exception e) {
             throw new BusinessException(500, "构造任务参数失败");
         }
-        // 同 (project, chapter, BATCH) 只允许一个活跃任务(T6.3.6 去重)
+        // 去重键:单话按话去重;整部/多话按项目去重(同项目只允许一个全量/批量 BATCH)
         return Result.ok(taskService.ensureUniqueActiveTask(id, chapterId, "BATCH", payload));
     }
 
@@ -192,6 +205,7 @@ public class ProjectController {
     public record GenerateBatchRequest(
             String scope,
             Long chapterId,
+            List<Long> chapterIds,
             String colorMode,
             Boolean skipGenerated,
             Boolean forceLayout,

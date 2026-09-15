@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Checkbox, Collapse, Image, Radio, Select, Space, Switch, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Checkbox, Collapse, Image, Modal, Radio, Select, Space, Switch, Tag, Typography } from 'antd';
 import { CheckCircleOutlined, PauseCircleOutlined, PlayCircleOutlined, ThunderboltOutlined, WarningOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App } from 'antd';
@@ -38,17 +38,23 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets }
 }) {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
-  const [scope, setScope] = useState<'PROJECT' | 'CHAPTER'>('PROJECT');
+  const [scope, setScope] = useState<'PROJECT' | 'CHAPTER' | 'CHAPTERS'>('PROJECT');
   const [chapterId, setChapterId] = useState<number | undefined>(undefined);
+  const [selectedChapterIds, setSelectedChapterIds] = useState<number[]>([]);
+  const [chapterModalOpen, setChapterModalOpen] = useState(false);
   const [colorMode, setColorMode] = useState<string>(project.colorMode ?? 'partial');
   const [skipGenerated, setSkipGenerated] = useState(true);
   const [forceLayout, setForceLayout] = useState(false);
   const [forceImage, setForceImage] = useState(false);
 
-  const preflightChapterId = scope === 'CHAPTER' ? chapterId : undefined;
+  const preflightOpts = scope === 'CHAPTER'
+    ? { chapterId }
+    : scope === 'CHAPTERS' && selectedChapterIds.length > 0
+      ? { chapterIds: selectedChapterIds }
+      : undefined;
   const { data: preflight, isLoading: preflightLoading } = useQuery({
-    queryKey: ['preflight', projectId, preflightChapterId ?? 'all'],
-    queryFn: () => projectsApi.generationPreflight(projectId, preflightChapterId),
+    queryKey: ['preflight', projectId, preflightOpts?.chapterId ?? 'all', preflightOpts?.chapterIds?.join(',') ?? ''],
+    queryFn: () => projectsApi.generationPreflight(projectId, preflightOpts),
   });
 
   // 活跃 BATCH 任务(0排队/1进行中/6停止中)
@@ -73,6 +79,7 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets }
     mutationFn: () => projectsApi.generateBatch(projectId, {
       scope,
       chapterId: scope === 'CHAPTER' ? chapterId : undefined,
+      chapterIds: scope === 'CHAPTERS' ? selectedChapterIds : undefined,
       colorMode,
       skipGenerated,
       forceLayout,
@@ -98,7 +105,8 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets }
     onError: (e) => message.error(e instanceof Error ? e.message : '操作失败'),
   });
 
-  const canStart = !!preflight?.ready && !batchActive && !!preflight?.pageCount;
+  const canStart = !!preflight?.ready && !batchActive && !!preflight?.pageCount
+    && (scope !== 'CHAPTERS' || selectedChapterIds.length > 0);
   const required = preflight?.stats?.find((s) => s.assetType === 1);
 
   return (
@@ -116,7 +124,8 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets }
               optionType="button"
               options={[
                 { value: 'PROJECT', label: '整部作品' },
-                { value: 'CHAPTER', label: '指定话' },
+                { value: 'CHAPTER', label: '单话' },
+                { value: 'CHAPTERS', label: '多话' },
               ]}
             />
             {scope === 'CHAPTER' && (
@@ -127,6 +136,18 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets }
                 onChange={setChapterId}
                 options={chapters.map((c) => ({ value: c.id, label: `第${c.chapterNo}话 ${c.title}` }))}
               />
+            )}
+            {scope === 'CHAPTERS' && (
+              <Space wrap>
+                <Button onClick={() => setChapterModalOpen(true)}>选择话({selectedChapterIds.length})</Button>
+                {selectedChapterIds.length > 0 && (
+                  <Typography.Text type="secondary" className="text-xs">
+                    已选 {selectedChapterIds.length} 话 · 约 {chapters
+                      .filter((c) => selectedChapterIds.includes(c.id))
+                      .reduce((sum, c) => sum + (c.pageCount ?? 0), 0)} 页
+                  </Typography.Text>
+                )}
+              </Space>
             )}
           </Space>
           <Space wrap>
@@ -255,6 +276,51 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets }
 
       {/* T6.4.4 页画廊(按话折叠;重试按钮在 Phase 6.5 单页接口上线后接入) */}
       <PageGallery chapters={chapters} />
+
+      {/* 多话批量选择对话框 */}
+      <Modal
+        open={chapterModalOpen}
+        title="批量选择要生成的话"
+        okText={`生成已选 ${selectedChapterIds.length} 话`}
+        cancelText="取消"
+        confirmLoading={start.isPending}
+        okButtonProps={{ disabled: selectedChapterIds.length === 0 }}
+        onCancel={() => setChapterModalOpen(false)}
+        onOk={() => {
+          setChapterModalOpen(false);
+          start.mutate();
+        }}
+      >
+        <div className="flex flex-col gap-3">
+          <Space>
+            <Button size="small" onClick={() => setSelectedChapterIds(chapters.map((c) => c.id))}>全选</Button>
+            <Button size="small" onClick={() => setSelectedChapterIds([])}>清空</Button>
+            <Typography.Text type="secondary" className="text-xs">
+              共 {chapters.length} 话 · 已选 {selectedChapterIds.length} 话 · 约 {chapters
+                .filter((c) => selectedChapterIds.includes(c.id))
+                .reduce((sum, c) => sum + (c.pageCount ?? 0), 0)} 页
+            </Typography.Text>
+          </Space>
+          <div className="max-h-80 overflow-auto flex flex-col gap-1">
+            {chapters.map((c) => (
+              <label key={c.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 cursor-pointer">
+                <Checkbox
+                  checked={selectedChapterIds.includes(c.id)}
+                  onChange={(e) => setSelectedChapterIds((prev) =>
+                    e.target.checked ? [...prev, c.id] : prev.filter((x) => x !== c.id))}
+                />
+                <span className="text-sm">第{c.chapterNo}话 {c.title}</span>
+                <Typography.Text type="secondary" className="text-xs ml-auto">
+                  {c.pageCount ?? 0} 页{(c.status ?? 0) < 2 ? ' · 脚本未完成' : ''}
+                </Typography.Text>
+              </label>
+            ))}
+          </div>
+          <Typography.Text type="secondary" className="text-xs">
+            所选话将合并为一个生成任务;素材预检以所选话并集计算,缺必需角色素材时无法开始。
+          </Typography.Text>
+        </div>
+      </Modal>
     </div>
   );
 }

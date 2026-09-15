@@ -53,16 +53,22 @@ public class GenerationPreflightService {
             List<TypeStat> stats,
             List<String> warnings) {}
 
-    /**
-     * 预检:chapterId 为空 = 整部作品;非空 = 指定话。
-     */
+    /** 预检:chapterId 为空 = 整部作品;非空 = 指定话 */
     public PreflightResult preflight(Long projectId, Long chapterId) {
+        return preflight(projectId, chapterId == null ? List.of() : List.of(chapterId));
+    }
+
+    /**
+     * 预检(Phase 6.4 多话批量):chapterIds 为空 = 整部作品;非空 = 话集合(并集统计)。
+     */
+    public PreflightResult preflight(Long projectId, List<Long> chapterIds) {
+        boolean scoped = chapterIds != null && !chapterIds.isEmpty();
         List<String> warnings = new ArrayList<>();
 
         // 1. 目标页面
         List<PageEntity> pages = pageMapper.selectList(new LambdaQueryWrapper<PageEntity>()
                 .eq(PageEntity::getProjectId, projectId)
-                .eq(chapterId != null, PageEntity::getChapterId, chapterId)
+                .in(scoped, PageEntity::getChapterId, chapterIds)
                 .orderByAsc(PageEntity::getChapterId)
                 .orderByAsc(PageEntity::getPageNo));
         if (pages.isEmpty()) {
@@ -72,7 +78,7 @@ public class GenerationPreflightService {
         // 2. 话脚本就绪检查
         List<Chapter> chapters = chapterMapper.selectList(new LambdaQueryWrapper<Chapter>()
                 .eq(Chapter::getProjectId, projectId)
-                .eq(chapterId != null, Chapter::getId, chapterId));
+                .in(scoped, Chapter::getId, chapterIds));
         long notReady = chapters.stream()
                 .filter(c -> c.getStatus() == null || c.getStatus() < Chapter.STATUS_SCRIPT_READY)
                 .count();

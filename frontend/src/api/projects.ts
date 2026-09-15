@@ -153,15 +153,20 @@ export const projectsApi = {
   rebuildAssets: (id: number) => unwrap<TaskVO>(http.post(`/projects/${id}/rebuild-assets`)),
   regenerateScript: (chapterId: number) => unwrap<TaskVO>(http.post(`/chapters/${chapterId}/regenerate-script`)),
   generateSheet: (assetId: number) => unwrap<TaskVO>(http.post(`/assets/${assetId}/generate-sheet`)),
-  generationPreflight: (projectId: number, chapterId?: number) =>
-    unwrap<PreflightResult>(http.get(`/projects/${projectId}/generation-preflight`, { params: chapterId ? { chapterId } : {} })),
+  generationPreflight: (projectId: number, opts?: { chapterId?: number; chapterIds?: number[] }) => {
+    const params: Record<string, unknown> = {};
+    if (opts?.chapterId) params.chapterId = opts.chapterId;
+    if (opts?.chapterIds?.length) params.chapterIds = opts.chapterIds.join(',');
+    return unwrap<PreflightResult>(http.get(`/projects/${projectId}/generation-preflight`, { params }));
+  },
   rebuildPageAssetRefs: (projectId: number) =>
     unwrap<number>(http.post(`/projects/${projectId}/page-asset-refs/rebuild`)),
   pipelineStages: (projectId: number) =>
     unwrap<PipelineStageVO[]>(http.get(`/projects/${projectId}/pipeline`)),
   generateBatch: (projectId: number, data: {
-    scope: 'PROJECT' | 'CHAPTER';
+    scope: 'PROJECT' | 'CHAPTER' | 'CHAPTERS';
     chapterId?: number;
+    chapterIds?: number[];
     colorMode?: string;
     skipGenerated?: boolean;
     forceLayout?: boolean;

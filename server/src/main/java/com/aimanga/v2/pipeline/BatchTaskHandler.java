@@ -50,30 +50,40 @@ public class BatchTaskHandler implements TaskHandler {
     public void run(TaskEntity task, TaskRuntime runtime) {
         Project project = ctx.project(task.getProjectId());
         JsonNode payload = parse(task.getPayload());
-        boolean scopeChapter = payload.path("scope").asText("PROJECT").equals("CHAPTER");
+        String scope = payload.path("scope").asText("PROJECT");
         Long chapterId = payload.has("chapterId") && payload.get("chapterId").canConvertToLong()
                 ? payload.get("chapterId").asLong() : null;
+        // 多话批量(Phase 6.4 增强):scope=CHAPTERS 时取 chapterIds 数组
+        List<Long> chapterIds = new java.util.ArrayList<>();
+        if (payload.has("chapterIds") && payload.get("chapterIds").isArray()) {
+            payload.get("chapterIds").forEach(n -> {
+                if (n.canConvertToLong()) chapterIds.add(n.asLong());
+            });
+        }
         String colorMode = payload.path("colorMode").asText(null);
         boolean skipGenerated = payload.path("skipGenerated").asBoolean(true);
         boolean forceLayout = payload.path("forceLayout").asBoolean(false);
         boolean forceImage = payload.path("forceImage").asBoolean(false);
 
-        List<PageEntity> pages = targetPages(project.getId(), chapterId);
+        List<PageEntity> pages = targetPages(project.getId(), chapterId, chapterIds);
 
         // ===== Gate(T6.3.6) =====
         if (pages.isEmpty()) {
             throw new BusinessException(400, "目标范围没有页面,请先完成脚本生成");
         }
+        boolean scoped = chapterId != null || !chapterIds.isEmpty();
         List<Chapter> chapters = ctx.chapterMapper.selectList(new LambdaQueryWrapper<Chapter>()
                 .eq(Chapter::getProjectId, project.getId())
-                .eq(chapterId != null, Chapter::getId, chapterId));
+                .eq(chapterId != null, Chapter::getId, chapterId)
+                .in(chapterIds != null && !chapterIds.isEmpty(), Chapter::getId, chapterIds));
         long notReady = chapters.stream()
                 .filter(c -> c.getStatus() == null || c.getStatus() < Chapter.STATUS_SCRIPT_READY)
                 .count();
         if (notReady > 0) {
             throw new BusinessException(400, notReady + " 话脚本尚未生成完成,请先完成脚本");
         }
-        var preflight = generationPreflightService.preflight(project.getId(), chapterId);
+        var preflight = generationPreflightService.preflight(project.getId(),
+                chapterId != null ? java.util.List.of(chapterId) : chapterIds);
         if (!preflight.ready()) {
             String names = preflight.missingRequiredAssets().stream()
                     .map(a -> "「" + a.name() + "」").toList().toString();
@@ -106,7 +116,7 @@ public class BatchTaskHandler implements TaskHandler {
 
         // ===== 阶段二:IMAGE(成品页并发) =====
         stageService.markRunning(project.getId(), PipelineStageService.STAGE_IMAGE);
-        List<PageEntity> pagesAfterLayout = targetPages(project.getId(), chapterId);
+        List<PageEntity> pagesAfterLayout = targetPages(project.getId(), chapterId, chapterIds);
         syncImageItems(project.getId(), pagesAfterLayout, skipGenerated, forceImage);
         stageRunner.run(project.getId(), PipelineStageService.STAGE_IMAGE, runtime,
                 item -> {
@@ -122,11 +132,11 @@ public class BatchTaskHandler implements TaskHandler {
         }
 
         // ===== 汇总(T6.3.7) =====
-        summarize(project, pagesAfterLayout, chapterId);
+        summarize(project, pagesAfterLayout, chapterId, "PROJECT".equals(scope));
     }
 
-    /** 汇总:阶段成败、话状态、项目状态、默认封面(T6.3.9) */
-    private void summarize(Project project, List<PageEntity> pages, Long chapterId) {
+    /** 汇总:阶段成败、话状态、项目状态、默认封面(T6.3.9,仅整部 scope 设默认封面) */
+    private void summarize(Project project, List<PageEntity> pages, Long chapterId, boolean wholeProject) {
         PipelineStageService.StageItemStats imageStats =
                 stageService.getItemStats(project.getId(), PipelineStageService.STAGE_IMAGE);
         if (imageStats.failed() == 0) {
@@ -168,7 +178,7 @@ public class BatchTaskHandler implements TaskHandler {
         }
 
         // 默认封面:整部生成完成且未设人工封面时,取第一张成品页
-        if (failedPages == 0 && chapterId == null
+        if (failedPages == 0 && wholeProject
                 && (project.getCoverUrl() == null || project.getCoverUrl().isBlank())) {
             latest.stream()
                     .filter(p -> p.getGenerateStatus() != null && p.getGenerateStatus() == PageEntity.GEN_SUCCESS
@@ -217,10 +227,12 @@ public class BatchTaskHandler implements TaskHandler {
         }
     }
 
-    private List<PageEntity> targetPages(Long projectId, Long chapterId) {
+    private List<PageEntity> targetPages(Long projectId, Long chapterId, List<Long> chapterIds) {
+        boolean scoped = chapterId != null || (chapterIds != null && !chapterIds.isEmpty());
         return ctx.pageMapper.selectList(new LambdaQueryWrapper<PageEntity>()
                 .eq(PageEntity::getProjectId, projectId)
                 .eq(chapterId != null, PageEntity::getChapterId, chapterId)
+                .in(chapterIds != null && !chapterIds.isEmpty(), PageEntity::getChapterId, chapterIds)
                 .orderByAsc(PageEntity::getChapterId)
                 .orderByAsc(PageEntity::getPageNo));
     }
