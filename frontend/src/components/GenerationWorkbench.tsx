@@ -31,11 +31,12 @@ const STAGE_STATUS: Record<number, { label: string; color: string }> = {
  * 生成控制区(T6.4.1) + 素材预检卡片(T6.4.2) + 实时 Stage 进度(T6.4.3) + 页画廊(T6.4.4) + 暂停/继续(T6.4.5)。
  * BATCH 断点续跑由后端保证:已成功页面绝不重画。
  */
-export function GenerationWorkbench({ projectId, project, chapters, onGoAssets }: {
+export function GenerationWorkbench({ projectId, project, chapters, onGoAssets, initialChapterId }: {
   projectId: number;
   project: { colorMode: string | null };
   chapters: ChapterVO[];
   onGoAssets: () => void;
+  initialChapterId?: number;
 }) {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
@@ -276,7 +277,7 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets }
       )}
 
       {/* T6.4.4 页画廊(按话折叠;重试按钮在 Phase 6.5 单页接口上线后接入) */}
-      <PageGallery projectId={projectId} chapters={chapters} />
+      <PageGallery projectId={projectId} chapters={chapters} initialChapterId={initialChapterId} />
 
       {/* 多话批量选择对话框 */}
       <Modal
@@ -327,8 +328,13 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets }
 }
 
 /** 页画廊:按话 → 页,展示 未生成/生成中/成功/失败 与 OSS 图 */
-function PageGallery({ projectId, chapters }: { projectId: number; chapters: ChapterVO[] }) {
-  const [openKeys, setOpenKeys] = useState<string[]>([]);
+function PageGallery({ projectId, chapters, initialChapterId }: {
+  projectId: number;
+  chapters: ChapterVO[];
+  initialChapterId?: number;
+}) {
+  const [openKeys, setOpenKeys] = useState<string[]>(
+    initialChapterId ? [String(initialChapterId)] : []);
   return (
     <Card size="small" title="页画廊">
       {chapters.length === 0 ? (
@@ -371,7 +377,9 @@ function ChapterPages({ projectId, chapterId }: { projectId: number; chapterId: 
           <div
             key={p.id}
             className="p-2 rounded-lg border border-gray-200 bg-white cursor-pointer hover:border-indigo-400 hover:shadow-sm transition"
-            onClick={() => navigate(`/projects/${projectId}/pages/${p.id}`)}
+            onClick={() => navigate(`/projects/${projectId}/pages/${p.id}`, {
+              state: { from: 'generate', chapterId }
+            })}
             title="点击进入页详情"
           >
             <div className="aspect-[3/4] rounded bg-gray-50 flex items-center justify-center overflow-hidden relative">

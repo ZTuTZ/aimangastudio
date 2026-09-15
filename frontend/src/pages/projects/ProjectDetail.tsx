@@ -2,7 +2,7 @@ import { App, AutoComplete, Button, Card, Checkbox, Form, Image, Input, Modal, P
 import { ArrowLeftOutlined, EditOutlined, FileImageOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { GenerationWorkbench } from '@/components/GenerationWorkbench';
 import {
   ASSET_TYPE_NAMES,
@@ -29,7 +29,10 @@ export function ProjectDetail() {
   const [chapterModal, setChapterModal] = useState<{ open: boolean; chapter?: ChapterVO }>({ open: false });
   const [assetModal, setAssetModal] = useState<{ open: boolean; asset?: AssetVO }>({ open: false });
   const [assetCategory, setAssetCategory] = useState<number>(1); // 默认展示「角色」
-  const [tabKey, setTabKey] = useState<string>('chapters');
+  // 从页详情返回时恢复来源页签(如 生成成品)与展开的话
+  const location = useLocation();
+  const returnState = (location.state ?? {}) as { tab?: string; chapterId?: number };
+  const [tabKey, setTabKey] = useState<string>(returnState.tab ?? 'chapters');
   const [infoModalOpen, setInfoModalOpen] = useState(false);
 
   if (!project) {
@@ -161,6 +164,7 @@ export function ProjectDetail() {
                   project={project}
                   chapters={chapters ?? []}
                   onGoAssets={() => setTabKey('assets')}
+                  initialChapterId={returnState.chapterId}
                 />
               ),
             },

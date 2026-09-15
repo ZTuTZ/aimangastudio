@@ -3,7 +3,7 @@ import { ArrowLeftOutlined, ReloadOutlined, SaveOutlined, ThunderboltOutlined } 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App } from 'antd';
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { projectsApi } from '@/api/projects';
 
 /**
@@ -14,6 +14,7 @@ import { projectsApi } from '@/api/projects';
 export function PageDetail() {
   const { id, pageId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const projectId = Number(id);
   const pid = Number(pageId);
   const { message } = App.useApp();
@@ -123,7 +124,22 @@ export function PageDetail() {
   return (
     <div className="flex flex-col gap-4">
       <Space>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/projects/${projectId}`)}>返回作品</Button>
+        <Button
+          icon={<ArrowLeftOutlined />}
+          onClick={() => {
+            // 从页画廊进入时,返回后恢复「生成成品」页签并展开原话
+            const from = (location.state ?? {}) as { from?: string; chapterId?: number };
+            if (from.from === 'generate') {
+              navigate(`/projects/${projectId}`, {
+                state: { tab: 'generate', chapterId: from.chapterId },
+              });
+            } else {
+              navigate(`/projects/${projectId}`);
+            }
+          }}
+        >
+          返回作品
+        </Button>
         <Typography.Title level={4} style={{ margin: 0 }}>第 {page.pageNo} 页</Typography.Title>
         {layoutStale && <Tag color="orange" bordered={false}>布局已过期(脚本 v{scriptVersion})</Tag>}
         {imageStale && <Tag color="red" bordered={false}>成品已过期(脚本 v{scriptVersion})</Tag>}
