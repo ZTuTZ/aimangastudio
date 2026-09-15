@@ -24,7 +24,40 @@ export const adminApi = {
   // 全局任务监控(Phase 7.2)
   monitorOverview: () => unwrap<MonitorOverview>(http.get('/admin/monitor/overview')),
   monitorActiveProjects: () => unwrap<MonitorProject[]>(http.get('/admin/monitor/active-projects')),
+  listAllProjects: () => unwrap<AdminProjectRow[]>(http.get('/admin/monitor/projects')),
+  batchValidate: (projectIds: number[]) =>
+    unwrap<BatchExportReport>(http.post('/admin/export/batch-validate', { projectIds })),
+  batchExportUrl: '/api/admin/export/batch',
 };
+
+export interface AdminProjectRow {
+  id: number;
+  title: string;
+  status: number;
+  contentUid: string;
+}
+
+export interface BatchExportIssue {
+  level: string;
+  message: string;
+}
+
+export interface BatchExportItem {
+  projectId: number;
+  valid?: boolean;
+  exported?: boolean;
+  chapterCount?: number;
+  pageCount?: number;
+  issues?: BatchExportIssue[];
+  error?: string;
+}
+
+export interface BatchExportReport {
+  total: number;
+  success: number;
+  failed: number;
+  items: BatchExportItem[];
+}
 
 export interface MonitorChannel {
   channel: string;

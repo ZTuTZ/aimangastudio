@@ -61,6 +61,22 @@ public class AdminMonitorController {
         return Result.ok(data);
     }
 
+    /** 全量作品列表(发布导出用) */
+    @GetMapping("/projects")
+    public Result<List<Map<String, Object>>> allProjects() {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Project project : projectMapper.selectList(new LambdaQueryWrapper<Project>()
+                .orderByDesc(Project::getId))) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", project.getId());
+            row.put("title", project.getTitle());
+            row.put("status", project.getStatus());
+            row.put("contentUid", project.getContentUid());
+            result.add(row);
+        }
+        return Result.ok(result);
+    }
+
     @GetMapping("/active-projects")
     public Result<List<Map<String, Object>>> activeProjects() {
         // 有活跃任务的项目

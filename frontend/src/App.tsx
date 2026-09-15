@@ -12,6 +12,7 @@ import { UserManage } from '@/pages/admin/UserManage';
 import { SystemConfig } from '@/pages/admin/SystemConfig';
 import { PresetManage } from '@/pages/admin/PresetManage';
 import { TaskMonitor } from '@/pages/admin/TaskMonitor';
+import { PublishExport } from '@/pages/admin/PublishExport';
 import { NotFound } from '@/pages/NotFound';
 
 const router = createBrowserRouter([
@@ -30,6 +31,7 @@ const router = createBrowserRouter([
       { path: 'admin/configs', element: <RequireAdmin><SystemConfig /></RequireAdmin> },
       { path: 'admin/presets', element: <RequireAdmin><PresetManage /></RequireAdmin> },
       { path: 'admin/tasks', element: <RequireAdmin><TaskMonitor /></RequireAdmin> },
+      { path: 'admin/export', element: <RequireAdmin><PublishExport /></RequireAdmin> },
     ],
   },
   { path: '/403', element: <NotFound title="403" subTitle="没有权限访问该页面" /> },

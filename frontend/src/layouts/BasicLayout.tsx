@@ -1,14 +1,12 @@
 import { App, Avatar, Badge, Button, Layout, Menu, Space, Tag, Tooltip, Typography } from 'antd';
-import {
-  BookOutlined,
+import {BookOutlined,
   ControlOutlined,
   MonitorOutlined,
   PictureOutlined,
   SettingOutlined,
   TeamOutlined,
   ThunderboltOutlined,
-  UserOutlined,
-} from '@ant-design/icons';
+  UserOutlined, ExportOutlined } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/authStore';
@@ -93,6 +91,7 @@ export function BasicLayout() {
                     { key: '/admin/configs', icon: <ControlOutlined />, label: '系统配置' },
                     { key: '/admin/presets', icon: <PictureOutlined />, label: '风格预设' },
                     { key: '/admin/tasks', icon: <MonitorOutlined />, label: '任务监控' },
+                    { key: '/admin/export', icon: <ExportOutlined />, label: '发布导出' },
                   ],
                 }]
               : []),
