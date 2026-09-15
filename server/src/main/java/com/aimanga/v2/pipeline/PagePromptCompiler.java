@@ -57,11 +57,21 @@ public class PagePromptCompiler {
         return sb.toString();
     }
 
-    /** 成品页 prompt(Phase 6.3 PAGE 阶段使用) */
-    public String compileFinalPagePrompt(Project project, PageEntity page, List<String> assetLabels, String colorMode) {
+    /**
+     * 成品页 prompt(Phase 6.3 PAGE 阶段使用)。
+     * withLayout=true:以布局线稿为第 1 参考图,严格遵循构图;
+     * withLayout=false(page_direct_output=1 直接出图模式):由模型自行设计分镜,其余锚定要求不变。
+     */
+    public String compileFinalPagePrompt(Project project, PageEntity page, List<String> assetLabels,
+                                         String colorMode, boolean withLayout) {
         StringBuilder sb = new StringBuilder();
-        sb.append("依据给定的布局线稿(第 1 张参考图,构图约束)绘制最终漫画成品页。\n");
-        sb.append("布局线稿只约束构图与站位,请在此基础上精细化:清晰的线稿、明确的黑白灰关系或上色。\n\n");
+        if (withLayout) {
+            sb.append("依据给定的布局线稿(第 1 张参考图,构图约束)绘制最终漫画成品页。\n");
+            sb.append("布局线稿只约束构图与站位,请在此基础上精细化:清晰的线稿、明确的黑白灰关系或上色。\n\n");
+        } else {
+            sb.append("直接绘制最终漫画成品页。\n");
+            sb.append("自行设计本页分镜布局并精细化:清晰的线稿、明确的黑白灰关系或上色。\n\n");
+        }
         sb.append("页面内容:\n");
         if (page.getNarration() != null && !page.getNarration().isBlank()) {
             sb.append("旁白:").append(page.getNarration().trim()).append("\n");
@@ -78,9 +88,9 @@ public class PagePromptCompiler {
             assetLabels.forEach(l -> sb.append("- ").append(l).append("\n"));
         }
         sb.append("\n要求:\n");
-        sb.append("- 严格遵循第 1 张布局线稿的分格结构、人物站位与景别;\n");
-        sb.append("- 布局线稿中的每一个分格都必须完整画出,不得遗漏任何格子,不得放大某格导致其他格子被挤出画布;\n");
-        sb.append("- 旁白框(矩形)与对白气泡必须全部保留,位置与大小与布局线稿一致,并完整呈现在画布内;\n");
+        sb.append(withLayout
+                ? "- 严格遵循第 1 张布局线稿的分格结构、人物站位与景别;\n- 布局线稿中的每一个分格都必须完整画出,不得遗漏任何格子,不得放大某格导致其他格子被挤出画布;\n- 旁白框(矩形)与对白气泡必须全部保留,位置与大小与布局线稿一致,并完整呈现在画布内;\n"
+                : "- 每一个分格都必须完整呈现在画布内,不得放大某格导致其他格子被挤出画布;\n- 旁白框(矩形)与对白气泡必须全部画出并完整呈现在画布内;\n");
         sb.append("- 整页铺满画布,格与格之间保持白色分隔线,画布边缘不留大片空白,任何内容不得超出画布边缘;\n");
         sb.append("- 分镜技巧参考:斜切分镜/画中画/多格拼贴/破格构图/特写/氛围空镜;\n");
         sb.append("- 人物长相/发型/服装严格与对应角色参考图保持一致;\n");

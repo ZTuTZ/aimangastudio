@@ -51,17 +51,22 @@ public class PageGenerationService {
         if (!force && fresh) {
             return page.getGeneratedImageUrl();
         }
-        if (page.getLayoutImageUrl() == null || page.getLayoutImageUrl().isBlank()) {
+        // page_direct_output=1:直接出成品,不依赖布局图(T6.4 配置开关)
+        boolean directOutput = configService.getInt("page_direct_output", 0) == 1;
+        if (!directOutput
+                && (page.getLayoutImageUrl() == null || page.getLayoutImageUrl().isBlank())) {
             throw new BusinessException(400, "页面 " + page.getPageNo() + " 还没有布局图,请先生成布局");
         }
         markPageStatus(page.getId(), PageEntity.GEN_RUNNING, null, null, null, null, null);
         PageReferenceResolver.ResolvedReferences refs =
                 referenceResolver.resolve(project.getId(), page.getId(), project);
-        // 最终参考图:布局图置顶(构图约束),其后为素材图(身份/环境约束)
+        // 最终参考图:布局图置顶(构图约束),其后为素材图(身份/环境约束);直接出图模式无布局图
         List<String> images = new ArrayList<>();
-        images.add(page.getLayoutImageUrl());
+        if (!directOutput) {
+            images.add(page.getLayoutImageUrl());
+        }
         images.addAll(refs.imageUrls());
-        String prompt = promptCompiler.compileFinalPagePrompt(project, page, refs.assetLabels(), colorMode);
+        String prompt = promptCompiler.compileFinalPagePrompt(project, page, refs.assetLabels(), colorMode, !directOutput);
 
         String mode = colorMode == null || colorMode.isBlank()
                 ? (project.getColorMode() == null ? "partial" : project.getColorMode()) : colorMode;

@@ -94,24 +94,29 @@ public class BatchTaskHandler implements TaskHandler {
         markProjectStatus(project.getId(), Project.STATUS_GENERATING);
         chapters.forEach(c -> markChapterStatus(c.getId(), Chapter.STATUS_GENERATING));
 
-        int totalSteps = pages.size() + (int) pages.stream()
+        // page_direct_output=1:直接出成品,跳过布局阶段(配置开关,热生效)
+        boolean directOutput = ctx.configService.getInt("page_direct_output", 0) == 1;
+        int layoutSteps = directOutput ? 0 : pages.size();
+        int totalSteps = layoutSteps + (int) pages.stream()
                 .filter(p -> forceImage || !skipGenerated || staleOrMissing(p))
                 .count();
         runtime.begin(Math.max(1, totalSteps));
 
-        // ===== 阶段一:LAYOUT(T6.3.4) =====
-        stageService.markRunning(project.getId(), PipelineStageService.STAGE_LAYOUT);
-        syncLayoutItems(project.getId(), pages, forceLayout);
-        stageRunner.run(project.getId(), PipelineStageService.STAGE_LAYOUT, runtime,
-                item -> {
-                    PageEntity page = pageOf(item.getBusinessId());
-                    return "{\"pageId\":" + page.getId() + ",\"layout\":\""
-                            + layoutGenerationService.processPage(project, page, PipelineStageService.isForceRequested(item), task.getId())
-                            + "\"}";
-                }, stageRunner.imageEngine());
-        if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_LAYOUT)) {
-            log.info("[batch] 作品 {} LAYOUT 暂停,等待继续", project.getId());
-            return;
+        // ===== 阶段一:LAYOUT(T6.3.4;直接出图模式整段跳过) =====
+        if (!directOutput) {
+            stageService.markRunning(project.getId(), PipelineStageService.STAGE_LAYOUT);
+            syncLayoutItems(project.getId(), pages, forceLayout);
+            stageRunner.run(project.getId(), PipelineStageService.STAGE_LAYOUT, runtime,
+                    item -> {
+                        PageEntity page = pageOf(item.getBusinessId());
+                        return "{\"pageId\":" + page.getId() + ",\"layout\":\""
+                                + layoutGenerationService.processPage(project, page, PipelineStageService.isForceRequested(item), task.getId())
+                                + "\"}";
+                    }, stageRunner.imageEngine());
+            if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_LAYOUT)) {
+                log.info("[batch] 作品 {} LAYOUT 暂停,等待继续", project.getId());
+                return;
+            }
         }
 
         // ===== 阶段二:IMAGE(成品页并发) =====
@@ -132,11 +137,11 @@ public class BatchTaskHandler implements TaskHandler {
         }
 
         // ===== 汇总(T6.3.7) =====
-        summarize(project, pagesAfterLayout, chapterId, "PROJECT".equals(scope));
+        summarize(project, pagesAfterLayout, chapterId, "PROJECT".equals(scope), directOutput);
     }
 
     /** 汇总:阶段成败、话状态、项目状态、默认封面(T6.3.9,仅整部 scope 设默认封面) */
-    private void summarize(Project project, List<PageEntity> pages, Long chapterId, boolean wholeProject) {
+    private void summarize(Project project, List<PageEntity> pages, Long chapterId, boolean wholeProject, boolean directOutput) {
         PipelineStageService.StageItemStats imageStats =
                 stageService.getItemStats(project.getId(), PipelineStageService.STAGE_IMAGE);
         if (imageStats.failed() == 0) {
@@ -145,11 +150,13 @@ public class BatchTaskHandler implements TaskHandler {
             stageService.markFailed(project.getId(), PipelineStageService.STAGE_IMAGE,
                     imageStats.failed() + "/" + imageStats.total() + " 页成品生成失败,重跑可续作");
         }
-        // LAYOUT 阶段终态(若此前未标记)
-        PipelineStageService.StageItemStats layoutStats =
-                stageService.getItemStats(project.getId(), PipelineStageService.STAGE_LAYOUT);
-        if (layoutStats.failed() == 0) {
-            stageService.markSuccess(project.getId(), PipelineStageService.STAGE_LAYOUT);
+        // LAYOUT 阶段终态(直接出图模式无布局阶段,不标记)
+        if (!directOutput) {
+            PipelineStageService.StageItemStats layoutStats =
+                    stageService.getItemStats(project.getId(), PipelineStageService.STAGE_LAYOUT);
+            if (layoutStats.failed() == 0) {
+                stageService.markSuccess(project.getId(), PipelineStageService.STAGE_LAYOUT);
+            }
         }
 
         // 话状态

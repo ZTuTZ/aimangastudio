@@ -84,6 +84,16 @@ const GROUPS: GroupDef[] = [
     ],
   },
   {
+    key: 'page_output',
+    title: '成品生成方式',
+    fields: [
+      { key: 'page_direct_output', label: '直接出成品图', type: 'select', options: [
+        { value: '0', label: '关闭:先生成布局图,再出成品(默认)' },
+        { value: '1', label: '开启:直接出成品图,跳过布局阶段' },
+      ] },
+    ],
+  },
+  {
     key: 'oss',
     title: '阿里云 OSS(所有图片统一转存)',
     fields: [
