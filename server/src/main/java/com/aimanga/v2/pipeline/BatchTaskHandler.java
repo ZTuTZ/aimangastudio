@@ -84,7 +84,9 @@ public class BatchTaskHandler implements TaskHandler {
         }
         var preflight = generationPreflightService.preflight(project.getId(),
                 chapterId != null ? java.util.List.of(chapterId) : chapterIds);
-        if (!preflight.ready()) {
+        // 素材 Gate 开关(Phase 7.1):page_generation_asset_gate=1(默认)缺必需角色阻止出图;=0 仅警告放行
+        boolean gateEnabled = ctx.configService.getInt("page_generation_asset_gate", 1) == 1;
+        if (!preflight.ready() && gateEnabled) {
             String names = preflight.missingRequiredAssets().stream()
                     .map(a -> "「" + a.name() + "」").toList().toString();
             throw new BusinessException(400, "缺少必需角色素材: " + names + ",请先在资产库勾选生成(系统不会自动补素材)");

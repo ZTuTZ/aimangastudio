@@ -25,6 +25,11 @@ public class TaskQueue {
         return redissonClient.getBlockingQueue(QUEUE_KEY);
     }
 
+    /** 队列当前长度(监控用,Phase 7.2) */
+    public long size() {
+        return queue().size();
+    }
+
     /** 立即入队 */
     public void enqueue(long taskId) {
         queue().add(taskId);

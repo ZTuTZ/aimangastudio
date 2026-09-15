@@ -53,6 +53,22 @@ public class RedisSemaphores {
         release("ai:" + channel);
     }
 
+    /** AI 通道占用监控(Phase 7.2):channel → {used, total} */
+    public java.util.Map<String, int[]> aiOccupancy() {
+        java.util.Map<String, int[]> result = new java.util.LinkedHashMap<>();
+        for (String channel : java.util.List.of("text", "image", "merge")) {
+            int total = configService.getInt("ai_" + channel + "_concurrency", 10);
+            int available;
+            try {
+                available = redissonClient.getSemaphore("aimanga:v2:sem:ai:" + channel).availablePermits();
+            } catch (Exception e) {
+                available = total;
+            }
+            result.put(channel, new int[]{Math.max(0, total - available), total});
+        }
+        return result;
+    }
+
     /** 配置热更新:调整所有活跃信号量的许可数 */
     public void refresh() {
         for (String name : localNames) {

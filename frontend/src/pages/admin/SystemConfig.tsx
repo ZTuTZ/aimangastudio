@@ -91,6 +91,11 @@ const GROUPS: GroupDef[] = [
         { value: '0', label: '关闭:先生成布局图,再出成品(默认)' },
         { value: '1', label: '开启:直接出成品图,跳过布局阶段' },
       ] },
+      { key: 'page_reference_max_images', label: '单页参考图上限(1-12)', type: 'number' },
+      { key: 'page_generation_asset_gate', label: '素材 Gate', type: 'select', options: [
+        { value: '1', label: '强制:缺必需角色参考图阻止出图(默认)' },
+        { value: '0', label: '宽松:仅警告,允许继续出图' },
+      ] },
     ],
   },
   {
