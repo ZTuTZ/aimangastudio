@@ -26,7 +26,9 @@ public class PagePromptCompiler {
         StringBuilder sb = new StringBuilder();
         sb.append("为漫画页绘制一张分镜布局线稿草图。这是构图草案,不是成品。\n");
         sb.append("只解决:页内分格布局、人物站位、景别(远/中/近特写)、动作关系、阅读顺序。\n");
-        sb.append("不要追求:精细脸部、材质、上色、文字渲染。\n\n");
+        sb.append("不要追求:精细脸部、材质、上色、文字渲染。\n");
+        sb.append("整页必须铺满画布,无边距、无外围留白。\n");
+        sb.append("分镜要求:必须使用以下分镜技巧至少一种——斜切分镜/画中画/多格拼贴/破格构图/特写/氛围空镜;禁止单一的上下结构。\n\n");
         sb.append("页面内容:\n");
         if (page.getNarration() != null && !page.getNarration().isBlank()) {
             sb.append("旁白:").append(page.getNarration().trim()).append("\n");
@@ -77,6 +79,10 @@ public class PagePromptCompiler {
         }
         sb.append("\n要求:\n");
         sb.append("- 严格遵循第 1 张布局线稿的分格结构、人物站位与景别;\n");
+        sb.append("- 布局线稿中的每一个分格都必须完整画出,不得遗漏任何格子,不得放大某格导致其他格子被挤出画布;\n");
+        sb.append("- 旁白框(矩形)与对白气泡必须全部保留,位置与大小与布局线稿一致,并完整呈现在画布内;\n");
+        sb.append("- 整页铺满画布,格与格之间保持白色分隔线,画布边缘不留大片空白,任何内容不得超出画布边缘;\n");
+        sb.append("- 分镜技巧参考:斜切分镜/画中画/多格拼贴/破格构图/特写/氛围空镜;\n");
         sb.append("- 人物长相/发型/服装严格与对应角色参考图保持一致;\n");
         sb.append("- 对话框内留白,严禁绘制任何文字;\n");
         sb.append("- 色彩模式:").append(colorModeLabel(colorMode)).append(";\n");
