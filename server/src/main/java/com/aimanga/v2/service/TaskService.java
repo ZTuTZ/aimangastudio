@@ -82,7 +82,8 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
     }
 
     public PageResult<TaskVO> listPaged(int page, int size, Integer status, String type, Long projectId, String keyword) {
-        Long userId = CurrentUser.id();
+        // Phase 7.2:ADMIN 查看全局任务(不限用户);普通用户仅本人
+        Long userId = CurrentUser.isAdmin() ? null : CurrentUser.id();
         String t = (type == null || type.isBlank()) ? null : type.trim().toUpperCase();
         String kw = (keyword == null || keyword.isBlank()) ? null : keyword.trim().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
         long total = baseMapper.countFiltered(userId, status, t, projectId, kw);
@@ -164,6 +165,12 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
             throw new BusinessException(409, "任务进行中,请先停止后再删除");
         }
         removeById(taskId);
+    }
+
+    /** 指定状态任务数(监控用,Phase 7.2) */
+    public long countByStatus(int status) {
+        return baseMapper.selectCount(new LambdaQueryWrapper<TaskEntity>()
+                .eq(TaskEntity::getStatus, status));
     }
 
     public TaskVO toVO(TaskEntity task, String projectTitle) {

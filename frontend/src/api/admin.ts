@@ -20,4 +20,42 @@ export const adminApi = {
 
   deleteUser: (id: number, confirmUsername: string) =>
     unwrap<void>(http.delete(`/admin/users/${id}`, { data: { confirmUsername } })),
+
+  // 全局任务监控(Phase 7.2)
+  monitorOverview: () => unwrap<MonitorOverview>(http.get('/admin/monitor/overview')),
+  monitorActiveProjects: () => unwrap<MonitorProject[]>(http.get('/admin/monitor/active-projects')),
 };
+
+export interface MonitorChannel {
+  channel: string;
+  used: number;
+  total: number;
+}
+
+export interface MonitorOverview {
+  runningTasks: number;
+  pendingTasks: number;
+  queueLength: number;
+  maxConcurrency: number;
+  imageConcurrency: number;
+  aiChannels: MonitorChannel[];
+}
+
+export interface MonitorStage {
+  stageType: string;
+  status: number;
+  total: number | null;
+  success: number | null;
+  failed: number | null;
+  progress: number | null;
+}
+
+export interface MonitorProject {
+  projectId: number;
+  projectTitle: string;
+  taskId: number;
+  taskType: string;
+  taskStatus: number;
+  taskProgress: number;
+  stages: MonitorStage[];
+}

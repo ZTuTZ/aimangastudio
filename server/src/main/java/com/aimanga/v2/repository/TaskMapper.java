@@ -52,7 +52,7 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
             SELECT COUNT(*)
             FROM task t
             LEFT JOIN project p ON t.project_id = p.id
-            WHERE t.user_id = #{userId}
+            WHERE (#{userId} IS NULL OR t.user_id = #{userId})
               AND (#{status} IS NULL OR t.status = #{status})
               AND (#{type} IS NULL OR t.task_type = #{type})
               AND (#{projectId} IS NULL OR t.project_id = #{projectId})
@@ -75,7 +75,7 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
                    p.title AS projectTitle
             FROM task t
             LEFT JOIN project p ON t.project_id = p.id
-            WHERE t.user_id = #{userId}
+            WHERE (#{userId} IS NULL OR t.user_id = #{userId})
               AND (#{status} IS NULL OR t.status = #{status})
               AND (#{type} IS NULL OR t.task_type = #{type})
               AND (#{projectId} IS NULL OR t.project_id = #{projectId})
