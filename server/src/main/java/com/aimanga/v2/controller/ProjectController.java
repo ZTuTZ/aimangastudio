@@ -41,6 +41,7 @@ public class ProjectController {
     private final PipelineStageService stageService;
     private final GenerationPreflightService generationPreflightService;
     private final PageAssetBindingService pageAssetBindingService;
+    private final com.aimanga.v2.pipeline.PublicationService publicationService;
 
     @GetMapping
     public Result<PageResult<ProjectVO>> list(
