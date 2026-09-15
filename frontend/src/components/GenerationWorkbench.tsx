@@ -3,6 +3,7 @@ import { CheckCircleOutlined, PauseCircleOutlined, PlayCircleOutlined, Thunderbo
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App } from 'antd';
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ASSET_TYPE_NAMES, projectsApi, type ChapterVO } from '@/api/projects';
 import { tasksApi } from '@/api/tasks';
 
@@ -275,7 +276,7 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets }
       )}
 
       {/* T6.4.4 页画廊(按话折叠;重试按钮在 Phase 6.5 单页接口上线后接入) */}
-      <PageGallery chapters={chapters} />
+      <PageGallery projectId={projectId} chapters={chapters} />
 
       {/* 多话批量选择对话框 */}
       <Modal
@@ -326,7 +327,7 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets }
 }
 
 /** 页画廊:按话 → 页,展示 未生成/生成中/成功/失败 与 OSS 图 */
-function PageGallery({ chapters }: { chapters: ChapterVO[] }) {
+function PageGallery({ projectId, chapters }: { projectId: number; chapters: ChapterVO[] }) {
   const [openKeys, setOpenKeys] = useState<string[]>([]);
   return (
     <Card size="small" title="页画廊">
@@ -339,7 +340,7 @@ function PageGallery({ chapters }: { chapters: ChapterVO[] }) {
           items={chapters.map((c) => ({
             key: String(c.id),
             label: `第${c.chapterNo}话 ${c.title}(${c.pageCount ?? 0} 页)`,
-            children: <ChapterPages chapterId={c.id} />,
+            children: <ChapterPages projectId={projectId} chapterId={c.id} />,
           }))}
         />
       )}
@@ -347,7 +348,8 @@ function PageGallery({ chapters }: { chapters: ChapterVO[] }) {
   );
 }
 
-function ChapterPages({ chapterId }: { chapterId: number }) {
+function ChapterPages({ projectId, chapterId }: { projectId: number; chapterId: number }) {
+  const navigate = useNavigate();
   const { data: pages, isLoading } = useQuery({
     queryKey: ['pages', chapterId],
     queryFn: () => projectsApi.pages(chapterId),
@@ -361,11 +363,28 @@ function ChapterPages({ chapterId }: { chapterId: number }) {
         const status = p.generateStatus ?? 0;
         const color = status === 2 ? 'success' : status === 1 ? 'processing' : status === 3 ? 'error' : 'default';
         const label = status === 2 ? '成功' : status === 1 ? '生成中' : status === 3 ? '失败' : '未生成';
+        const imageStale = (p.imageScriptVersion ?? 0) < (p.scriptVersion ?? 1);
+        // 成品未出时显示布局图缩略(可看清构图进度)
+        const previewUrl = p.generatedImageUrl || p.layoutImageUrl || '';
+        const previewIsLayout = !p.generatedImageUrl && !!p.layoutImageUrl;
         return (
-          <div key={p.id} className="p-2 rounded-lg border border-gray-200 bg-white">
+          <div
+            key={p.id}
+            className="p-2 rounded-lg border border-gray-200 bg-white cursor-pointer hover:border-indigo-400 hover:shadow-sm transition"
+            onClick={() => navigate(`/projects/${projectId}/pages/${p.id}`)}
+            title="点击进入页详情"
+          >
             <div className="aspect-[3/4] rounded bg-gray-50 flex items-center justify-center overflow-hidden relative">
-              {p.generatedImageUrl ? (
-                <Image src={p.generatedImageUrl} alt={`第${p.pageNo}页`} className="w-full h-full object-cover" wrapperClassName="w-full h-full" />
+              {previewUrl ? (
+                <>
+                  <Image src={previewUrl} alt={`第${p.pageNo}页`} className="w-full h-full object-cover" wrapperClassName="w-full h-full" />
+                  {previewIsLayout && (
+                    <Tag color="blue" bordered={false} className="absolute top-1 left-1 z-10">布局图</Tag>
+                  )}
+                  {imageStale && status === 2 && (
+                    <Tag color="orange" bordered={false} className="absolute top-1 right-1 z-10">脚本已改</Tag>
+                  )}
+                </>
               ) : (
                 <Typography.Text type="secondary" className="text-xs">{label}</Typography.Text>
               )}
