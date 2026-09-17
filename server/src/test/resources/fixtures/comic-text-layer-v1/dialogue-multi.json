@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "comic-text-layer-1.0",
+  "pageId": 2,
+  "pageVersion": 1,
+  "elements": [
+    {"uid": "TXT_0001", "type": "DIALOGUE", "dialogueIndex": 0, "speaker": "林凡", "text": "有人来过。",
+     "position": {"x": 0.03, "y": 0.06, "width": 0.30, "height": 0.10},
+     "style": {"fontPreset": "DEFAULT_DIALOGUE", "fontSizeRatio": 0.028, "align": "CENTER", "maxLines": 4},
+     "bubble": {"preset": "DEFAULT_DIALOGUE", "tail": {"x": 0.18, "y": 0.16}}, "sortOrder": 1},
+    {"uid": "TXT_0002", "type": "DIALOGUE", "dialogueIndex": 1, "speaker": "陈伯", "text": "小姐,快看地上。",
+     "position": {"x": 0.67, "y": 0.22, "width": 0.30, "height": 0.10},
+     "style": {"fontPreset": "DEFAULT_DIALOGUE", "fontSizeRatio": 0.028, "align": "CENTER", "maxLines": 4},
+     "bubble": {"preset": "DEFAULT_DIALOGUE", "tail": {"x": 0.82, "y": 0.32}}, "sortOrder": 2},
+    {"uid": "TXT_0003", "type": "DIALOGUE", "dialogueIndex": 2, "speaker": "苏雨", "text": "这印子还没干。",
+     "position": {"x": 0.03, "y": 0.40, "width": 0.30, "height": 0.10},
+     "style": {"fontPreset": "DEFAULT_DIALOGUE", "fontSizeRatio": 0.028, "align": "CENTER", "maxLines": 4},
+     "bubble": {"preset": "DEFAULT_DIALOGUE", "tail": {"x": 0.18, "y": 0.50}}, "sortOrder": 3},
+    {"uid": "TXT_0004", "type": "DIALOGUE", "dialogueIndex": 3, "speaker": "林凡", "text": "去把柴房的灯点上。",
+     "position": {"x": 0.67, "y": 0.56, "width": 0.30, "height": 0.10},
+     "style": {"fontPreset": "DEFAULT_DIALOGUE", "fontSizeRatio": 0.028, "align": "CENTER", "maxLines": 4},
+     "bubble": {"preset": "DEFAULT_DIALOGUE", "tail": {"x": 0.82, "y": 0.66}}, "sortOrder": 4},
+    {"uid": "TXT_0005", "type": "DIALOGUE", "dialogueIndex": 4, "speaker": "陈伯", "text": "是,少爷。",
+     "position": {"x": 0.35, "y": 0.72, "width": 0.30, "height": 0.10},
+     "style": {"fontPreset": "DEFAULT_DIALOGUE", "fontSizeRatio": 0.028, "align": "CENTER", "maxLines": 4},
+     "bubble": {"preset": "DEFAULT_DIALOGUE", "tail": {"x": 0.50, "y": 0.82}}, "sortOrder": 5}
+  ]
+}

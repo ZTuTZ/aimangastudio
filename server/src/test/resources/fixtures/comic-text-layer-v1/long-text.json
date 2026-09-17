@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "comic-text-layer-1.0",
+  "pageId": 4,
+  "pageVersion": 2,
+  "elements": [
+    {"uid": "TXT_0001", "type": "NARRATION", "dialogueIndex": null, "speaker": null,
+     "text": "雨下了整整三天,公府的青石板路被冲刷得发亮,所有人的脚步都变得匆忙而小心,唯独林凡站在廊下,一动不动地盯着那枚刚刚从柴房里找出来的旧玉佩,仿佛要从上面看出三年来被掩埋的全部真相。",
+     "position": {"x": 0.03, "y": 0.85, "width": 0.94, "height": 0.12},
+     "style": {"fontPreset": "DEFAULT_NARRATION", "fontSizeRatio": 0.026, "align": "LEFT", "maxLines": 5},
+     "bubble": {"preset": "NARRATION_BOX", "tail": null}, "sortOrder": 1}
+  ]
+}

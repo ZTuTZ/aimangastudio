@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "comic-text-layer-1.0",
+  "pageId": 6,
+  "pageVersion": 1,
+  "elements": [
+    {"uid": "TXT_0001", "type": "DIALOGUE", "dialogueIndex": 0, "speaker": "林凡", "text": "谁!",
+     "position": {"x": 0.01, "y": 0.01, "width": 0.20, "height": 0.08},
+     "style": {"fontPreset": "EMPHASIS", "fontSizeRatio": 0.04, "align": "CENTER", "maxLines": 2},
+     "bubble": {"preset": "DEFAULT_DIALOGUE", "tail": {"x": 0.11, "y": 0.09}}, "sortOrder": 1},
+    {"uid": "TXT_0002", "type": "SFX", "dialogueIndex": null, "speaker": null, "text": "哗啦——",
+     "position": {"x": 0.75, "y": 0.92, "width": 0.22, "height": 0.06},
+     "style": {"fontPreset": "SFX", "fontSizeRatio": 0.05, "align": "CENTER", "maxLines": 1},
+     "bubble": {"preset": "DEFAULT_DIALOGUE", "tail": null}, "sortOrder": 2}
+  ]
+}

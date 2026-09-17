@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "comic-text-layer-1.0",
+  "pageId": 3,
+  "pageVersion": 1,
+  "elements": [
+    {"uid": "TXT_0001", "type": "NARRATION", "dialogueIndex": null, "speaker": null,
+     "text": "三日前,父亲的书房失窃,丢的却不是金银,而是一枚旧玉佩。",
+     "position": {"x": 0.03, "y": 0.88, "width": 0.94, "height": 0.09},
+     "style": {"fontPreset": "DEFAULT_NARRATION", "fontSizeRatio": 0.026, "align": "LEFT", "maxLines": 3},
+     "bubble": {"preset": "NARRATION_BOX", "tail": null}, "sortOrder": 1}
+  ]
+}

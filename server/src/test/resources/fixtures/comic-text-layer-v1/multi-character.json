@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "comic-text-layer-1.0",
+  "pageId": 5,
+  "pageVersion": 1,
+  "elements": [
+    {"uid": "TXT_0001", "type": "DIALOGUE", "dialogueIndex": 0, "speaker": "林凡", "text": "你来做什么。",
+     "position": {"x": 0.05, "y": 0.08, "width": 0.28, "height": 0.10},
+     "style": {"fontPreset": "DEFAULT_DIALOGUE", "fontSizeRatio": 0.028, "align": "CENTER", "maxLines": 3},
+     "bubble": {"preset": "DEFAULT_DIALOGUE", "tail": {"x": 0.19, "y": 0.18}}, "sortOrder": 1},
+    {"uid": "TXT_0002", "type": "DIALOGUE", "dialogueIndex": 1, "speaker": "苏雨", "text": "我来看看你,不行吗。",
+     "position": {"x": 0.67, "y": 0.10, "width": 0.28, "height": 0.10},
+     "style": {"fontPreset": "DEFAULT_DIALOGUE", "fontSizeRatio": 0.028, "align": "CENTER", "maxLines": 3},
+     "bubble": {"preset": "DEFAULT_DIALOGUE", "tail": {"x": 0.81, "y": 0.20}}, "sortOrder": 2},
+    {"uid": "TXT_0003", "type": "THOUGHT", "dialogueIndex": null, "speaker": "林凡", "text": "她的眼神和三年前一样。",
+     "position": {"x": 0.36, "y": 0.30, "width": 0.28, "height": 0.09},
+     "style": {"fontPreset": "DEFAULT_THOUGHT", "fontSizeRatio": 0.026, "align": "CENTER", "maxLines": 3},
+     "bubble": {"preset": "THOUGHT_SIMPLE", "tail": {"x": 0.50, "y": 0.39}}, "sortOrder": 3}
+  ]
+}

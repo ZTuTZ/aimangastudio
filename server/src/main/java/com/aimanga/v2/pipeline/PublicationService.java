@@ -5,10 +5,12 @@ import com.aimanga.v2.dto.export.ComicManifest;
 import com.aimanga.v2.dto.export.ComicManifestChapter;
 import com.aimanga.v2.dto.export.ComicManifestPage;
 import com.aimanga.v2.model.Chapter;
+import com.aimanga.v2.model.PageTextElement;
 import com.aimanga.v2.model.PageEntity;
 import com.aimanga.v2.model.Project;
 import com.aimanga.v2.repository.ChapterMapper;
 import com.aimanga.v2.repository.PageMapper;
+import com.aimanga.v2.repository.PageTextElementMapper;
 import com.aimanga.v2.repository.ProjectMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -25,7 +27,9 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -49,6 +53,7 @@ public class PublicationService {
     private final ProjectMapper projectMapper;
     private final ChapterMapper chapterMapper;
     private final PageMapper pageMapper;
+    private final PageTextElementMapper pageTextElementMapper;
     private final ObjectMapper objectMapper;
 
     private final HttpClient http = HttpClient.newBuilder()
@@ -144,6 +149,15 @@ public class PublicationService {
                 .eq(Chapter::getProjectId, projectId)
                 .orderByAsc(Chapter::getChapterNo));
 
+        // 文本层(Phase 7.8):一次取全项目元素,按页分组
+        List<PageTextElement> textElements = pageTextElementMapper.selectList(
+                new LambdaQueryWrapper<PageTextElement>()
+                        .eq(PageTextElement::getProjectId, projectId));
+        Map<Long, List<PageTextElement>> textByPage = new java.util.LinkedHashMap<>();
+        for (PageTextElement e : textElements) {
+            textByPage.computeIfAbsent(e.getPageId(), k -> new ArrayList<>()).add(e);
+        }
+
         // manifest(仅阅读所需字段)
         List<ComicManifestChapter> manifestChapters = new ArrayList<>();
         for (Chapter chapter : chapters) {
@@ -156,8 +170,39 @@ public class PublicationService {
                         || isBlank(page.getGeneratedImageUrl())) {
                     continue; // 双保险:manifest 只收正式成品页
                 }
+                List<PageTextElement> layer = textByPage.get(page.getId());
+                ComicManifestPage.TextLayer textLayer = null;
+                if (layer != null && !layer.isEmpty()) {
+                    List<Map<String, Object>> elements = new ArrayList<>();
+                    for (PageTextElement e : layer) {
+                        Map<String, Object> el = new LinkedHashMap<>();
+                        el.put("uid", e.getElementUid());
+                        el.put("type", e.getElementType());
+                        el.put("dialogueIndex", e.getDialogueIndex());
+                        el.put("speaker", e.getSpeaker());
+                        el.put("text", e.getTextContent());
+                        el.put("position", Map.of("x", orZero(e.getX()), "y", orZero(e.getY()),
+                                "width", orZero(e.getWidth()), "height", orZero(e.getHeight())));
+                        Map<String, Object> style = new LinkedHashMap<>();
+                        style.put("fontPreset", e.getFontStyle());
+                        style.put("fontSizeRatio", e.getFontSizeRatio());
+                        style.put("align", e.getTextAlign());
+                        style.put("maxLines", e.getMaxLines());
+                        el.put("style", style);
+                        Map<String, Object> bubble = new LinkedHashMap<>();
+                        bubble.put("preset", e.getBubbleStyle());
+                        if (e.getTailX() != null && e.getTailY() != null) {
+                            bubble.put("tail", Map.of("x", e.getTailX(), "y", e.getTailY()));
+                        }
+                        el.put("bubble", bubble);
+                        el.put("sortOrder", e.getSortOrder());
+                        elements.add(el);
+                    }
+                    textLayer = new ComicManifestPage.TextLayer("comic-text-layer-1.0", elements);
+                }
                 manifestPages.add(new ComicManifestPage(page.getPageNo(),
-                        page.getGeneratedImageUrl(), filePathOf(chapter.getChapterNo(), page.getPageNo(), page.getGeneratedImageUrl())));
+                        page.getGeneratedImageUrl(), filePathOf(chapter.getChapterNo(), page.getPageNo(), page.getGeneratedImageUrl()),
+                        textLayer));
             }
             manifestChapters.add(new ComicManifestChapter(chapter.getChapterNo(), chapter.getTitle(), manifestPages));
         }
@@ -219,6 +264,10 @@ public class PublicationService {
         } catch (Exception e) {
             throw new BusinessException(500, "拉取页面图片失败: " + url + " (" + e.getMessage() + ")");
         }
+    }
+
+    private static double orZero(Double v) {
+        return v == null ? 0.0 : v;
     }
 
     private static String filePathOf(int chapterNo, int pageNo, String url) {

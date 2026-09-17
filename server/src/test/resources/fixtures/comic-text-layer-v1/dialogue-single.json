@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "comic-text-layer-1.0",
+  "pageId": 1,
+  "pageVersion": 1,
+  "elements": [
+    {
+      "uid": "TXT_0001",
+      "type": "DIALOGUE",
+      "dialogueIndex": 0,
+      "speaker": "林凡",
+      "text": "这里是什么地方？",
+      "position": {"x": 0.06, "y": 0.06, "width": 0.30, "height": 0.10},
+      "style": {"fontPreset": "DEFAULT_DIALOGUE", "fontSizeRatio": 0.028, "align": "CENTER", "maxLines": 4},
+      "bubble": {"preset": "DEFAULT_DIALOGUE", "tail": {"x": 0.21, "y": 0.16}},
+      "sortOrder": 1
+    }
+  ]
+}

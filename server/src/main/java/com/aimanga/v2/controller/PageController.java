@@ -28,6 +28,7 @@ public class PageController {
     private final TaskService taskService;
     private final PipelineStageService stageService;
     private final com.aimanga.v2.pipeline.GenerationRecordService generationRecordService;
+    private final com.aimanga.v2.pipeline.TextLayerService textLayerService;
 
     @GetMapping("/pages/{id}")
     public Result<PageVO> get(@PathVariable Long id) {
@@ -86,6 +87,45 @@ public class PageController {
     public Result<List<com.aimanga.v2.model.GenerationRecord>> generationRecords(@PathVariable Long id) {
         pageService.requireAccessible(id);
         return Result.ok(generationRecordService.recordsOfPage(id));
+    }
+
+    // ---------- 文本层(Phase 7.8) ----------
+
+    /** 获取文本层(空层表示未初始化) */
+    @GetMapping("/pages/{id}/text-layer")
+    public Result<com.aimanga.v2.dto.textlayer.TextLayerDto> getTextLayer(@PathVariable Long id) {
+        pageService.requireAccessible(id);
+        return Result.ok(textLayerService.getTextLayer(id));
+    }
+
+    /** 初始化:从 page.dialogue/narration 生成默认布局(幂等) */
+    @PostMapping("/pages/{id}/text-layer/initialize")
+    public Result<com.aimanga.v2.dto.textlayer.TextLayerDto> initializeTextLayer(@PathVariable Long id) {
+        pageService.requireAccessible(id);
+        return Result.ok(textLayerService.initializeFromPage(id));
+    }
+
+    /** 保存用户编辑(归一化坐标,按 uid 增删改) */
+    @PutMapping("/pages/{id}/text-layer")
+    public Result<com.aimanga.v2.dto.textlayer.TextLayerDto> saveTextLayer(
+            @PathVariable Long id,
+            @RequestBody com.aimanga.v2.dto.textlayer.TextLayerDto dto) {
+        pageService.requireAccessible(id);
+        return Result.ok(textLayerService.saveTextLayer(id, dto));
+    }
+
+    /** 重置:清空并按当前脚本重新生成默认布局 */
+    @PostMapping("/pages/{id}/text-layer/reset")
+    public Result<com.aimanga.v2.dto.textlayer.TextLayerDto> resetTextLayer(@PathVariable Long id) {
+        pageService.requireAccessible(id);
+        return Result.ok(textLayerService.resetTextLayer(id));
+    }
+
+    /** 同步脚本内容(更新 speaker/text,保留位置) */
+    @PostMapping("/pages/{id}/text-layer/sync")
+    public Result<com.aimanga.v2.dto.textlayer.TextLayerDto> syncTextLayer(@PathVariable Long id) {
+        pageService.requireAccessible(id);
+        return Result.ok(textLayerService.syncFromPageContent(id));
     }
 
     /** 单页上色(T6.6.1) */

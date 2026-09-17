@@ -58,6 +58,9 @@ public class PageEntity {
 
     private Integer imageScriptVersion;
 
+    /** 文本层同步时的脚本版本(Phase 7.8) */
+    private Integer textLayoutVersion;
+
     private LocalDateTime createTime;
 
     private LocalDateTime updateTime;
