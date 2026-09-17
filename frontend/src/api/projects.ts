@@ -195,6 +195,11 @@ export const projectsApi = {
   repaintPage: (id: number, data: { repaintPrompt: string; maskUrl: string }) =>
     unwrap<TaskVO>(http.post(`/pages/${id}/repaint`, data)),
   generationRecords: (id: number) => unwrap<GenerationRecordVO[]>(http.get(`/pages/${id}/generation-records`)),
+  textLayer: (id: number) => unwrap<TextLayerDto>(http.get(`/pages/${id}/text-layer`)),
+  initializeTextLayer: (id: number) => unwrap<TextLayerDto>(http.post(`/pages/${id}/text-layer/initialize`)),
+  saveTextLayer: (id: number, dto: TextLayerDto) => unwrap<TextLayerDto>(http.put(`/pages/${id}/text-layer`, dto)),
+  resetTextLayer: (id: number) => unwrap<TextLayerDto>(http.post(`/pages/${id}/text-layer/reset`)),
+  syncTextLayer: (id: number) => unwrap<TextLayerDto>(http.post(`/pages/${id}/text-layer/sync`)),
   assets: (projectId: number) => unwrap<AssetVO[]>(http.get(`/projects/${projectId}/assets`)),
   createAsset: (projectId: number, data: AssetPayload) =>
     unwrap<AssetVO>(http.post(`/projects/${projectId}/assets`, data)),
@@ -284,4 +289,45 @@ export interface GenerationRecordVO {
   status: string;
   error: string | null;
   createTime: string;
+}
+
+// ---------- Comic Text Layer(Phase 7.8,comic-text-layer-1.0) ----------
+
+export interface TextLayerPosition {
+  x: number;
+  y: number;
+  width: number;
+  height: number | null;
+}
+
+export interface TextLayerStyle {
+  fontPreset: string;
+  fontSizeRatio: number;
+  align: string;
+  maxLines: number | null;
+}
+
+export interface TextLayerBubble {
+  preset: string;
+  tail: { x: number; y: number } | null;
+}
+
+export interface TextLayerElement {
+  uid: string;
+  type: 'DIALOGUE' | 'NARRATION' | 'THOUGHT' | 'SFX';
+  dialogueIndex: number | null;
+  speaker: string | null;
+  text: string;
+  position: TextLayerPosition;
+  style: TextLayerStyle;
+  bubble: TextLayerBubble;
+  sortOrder: number;
+}
+
+export interface TextLayerDto {
+  schemaVersion: string;
+  pageId: number;
+  pageVersion: number | null;
+  textLayoutSourceVersion?: number | null;
+  elements: TextLayerElement[];
 }
