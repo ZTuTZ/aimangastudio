@@ -34,11 +34,13 @@ export function TaskMonitor() {
     queryKey: ['monitor-overview'],
     queryFn: adminApi.monitorOverview,
     refetchInterval: 5000,
+    refetchIntervalInBackground: true,
   });
   const { data: activeProjects } = useQuery({
     queryKey: ['monitor-active'],
     queryFn: adminApi.monitorActiveProjects,
     refetchInterval: 4000,
+    refetchIntervalInBackground: true,
   });
   const { data: taskPage, isLoading } = useQuery({
     queryKey: ['monitor-tasks', page, status, type],

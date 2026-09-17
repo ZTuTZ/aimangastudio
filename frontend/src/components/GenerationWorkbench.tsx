@@ -64,6 +64,7 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets, 
     queryKey: ['tasks', projectId, 'batch'],
     queryFn: () => tasksApi.list({ page: 1, size: 1, projectId, type: 'BATCH' }),
     refetchInterval: 5000,
+    refetchIntervalInBackground: true,
   });
   const batchTask = batchPage?.records?.[0];
   const batchActive = !!batchTask && [0, 1, 6].includes(batchTask.status);
@@ -73,6 +74,7 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets, 
     queryKey: ['pipeline', projectId],
     queryFn: () => projectsApi.pipelineStages(projectId),
     refetchInterval: batchActive ? 3000 : false,
+    refetchIntervalInBackground: true,
   });
   const layoutStage = stages?.find((s) => s.stageType === 'LAYOUT');
   const imageStage = stages?.find((s) => s.stageType === 'IMAGE');
@@ -360,6 +362,7 @@ function ChapterPages({ projectId, chapterId }: { projectId: number; chapterId: 
     queryKey: ['pages', chapterId],
     queryFn: () => projectsApi.pages(chapterId),
     refetchInterval: 5000,
+    refetchIntervalInBackground: true,
   });
   if (isLoading) return <Typography.Text type="secondary">加载中…</Typography.Text>;
   if (!pages || pages.length === 0) return <Typography.Text type="secondary">本话暂无页面</Typography.Text>;
