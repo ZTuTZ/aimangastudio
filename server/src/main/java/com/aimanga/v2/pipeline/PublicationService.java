@@ -20,6 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -55,11 +56,7 @@ public class PublicationService {
     private final PageMapper pageMapper;
     private final PageTextElementMapper pageTextElementMapper;
     private final ObjectMapper objectMapper;
-
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
+    private final RemoteImageFetcher remoteImageFetcher;
 
     // ---------- T7.3 校验 ----------
 
@@ -69,6 +66,10 @@ public class PublicationService {
                                     int chapterCount, int pageCount) {}
 
     public PublicationReport validate(Long projectId) {
+        return validateInternal(projectId);
+    }
+
+    private PublicationReport validateInternal(Long projectId) {
         Project project = projectMapper.selectById(projectId);
         if (project == null) {
             throw new BusinessException(404, "作品不存在: " + projectId);
@@ -135,9 +136,11 @@ public class PublicationService {
 
     // ---------- T7.4 导出 ----------
 
-    /** 校验通过后构建 manifest 并打包 ZIP(manifest.json + 成品页图片) */
-    public byte[] exportZip(Long projectId) {
-        PublicationReport report = validate(projectId);
+    /** 校验 + 构建 manifest(打包前调用;manifest 数据与 writeZip 共用) */
+
+    /** 校验通过后构建 manifest 并流式写 ZIP(Phase 8.8:不在内存中持有全量 byte[]) */
+    public ComicManifest buildManifest(Long projectId) {
+        PublicationReport report = validateInternal(projectId);
         if (!report.valid()) {
             String firstError = report.issues().stream()
                     .filter(i -> "ERROR".equals(i.level())).findFirst()
@@ -148,17 +151,14 @@ public class PublicationService {
         List<Chapter> chapters = chapterMapper.selectList(new LambdaQueryWrapper<Chapter>()
                 .eq(Chapter::getProjectId, projectId)
                 .orderByAsc(Chapter::getChapterNo));
-
-        // 文本层(Phase 7.8):一次取全项目元素,按页分组
         List<PageTextElement> textElements = pageTextElementMapper.selectList(
                 new LambdaQueryWrapper<PageTextElement>()
                         .eq(PageTextElement::getProjectId, projectId));
-        Map<Long, List<PageTextElement>> textByPage = new java.util.LinkedHashMap<>();
+        Map<Long, List<PageTextElement>> textByPage = new LinkedHashMap<>();
         for (PageTextElement e : textElements) {
             textByPage.computeIfAbsent(e.getPageId(), k -> new ArrayList<>()).add(e);
         }
 
-        // manifest(仅阅读所需字段)
         List<ComicManifestChapter> manifestChapters = new ArrayList<>();
         for (Chapter chapter : chapters) {
             List<PageEntity> pages = pageMapper.selectList(new LambdaQueryWrapper<PageEntity>()
@@ -168,7 +168,7 @@ public class PublicationService {
             for (PageEntity page : pages) {
                 if (page.getGenerateStatus() == null || page.getGenerateStatus() != PageEntity.GEN_SUCCESS
                         || isBlank(page.getGeneratedImageUrl())) {
-                    continue; // 双保险:manifest 只收正式成品页
+                    continue;
                 }
                 List<PageTextElement> layer = textByPage.get(page.getId());
                 ComicManifestPage.TextLayer textLayer = null;
@@ -183,12 +183,9 @@ public class PublicationService {
                         el.put("text", e.getTextContent());
                         el.put("position", Map.of("x", orZero(e.getX()), "y", orZero(e.getY()),
                                 "width", orZero(e.getWidth()), "height", orZero(e.getHeight())));
-                        Map<String, Object> style = new LinkedHashMap<>();
-                        style.put("fontPreset", e.getFontStyle());
-                        style.put("fontSizeRatio", e.getFontSizeRatio());
-                        style.put("align", e.getTextAlign());
-                        style.put("maxLines", e.getMaxLines());
-                        el.put("style", style);
+                        el.put("style", Map.of("fontPreset", safeStr(e.getFontStyle()),
+                                "fontSizeRatio", orZero(e.getFontSizeRatio()), "align", safeStr(e.getTextAlign()),
+                                "maxLines", e.getMaxLines() == null ? 4 : e.getMaxLines()));
                         Map<String, Object> bubble = new LinkedHashMap<>();
                         bubble.put("preset", e.getBubbleStyle());
                         if (e.getTailX() != null && e.getTailY() != null) {
@@ -201,12 +198,13 @@ public class PublicationService {
                     textLayer = new ComicManifestPage.TextLayer("comic-text-layer-1.0", elements);
                 }
                 manifestPages.add(new ComicManifestPage(page.getPageNo(),
-                        page.getGeneratedImageUrl(), filePathOf(chapter.getChapterNo(), page.getPageNo(), page.getGeneratedImageUrl()),
+                        page.getGeneratedImageUrl(),
+                        filePathOf(chapter.getChapterNo(), page.getPageNo(), page.getGeneratedImageUrl()),
                         textLayer));
             }
             manifestChapters.add(new ComicManifestChapter(chapter.getChapterNo(), chapter.getTitle(), manifestPages));
         }
-        ComicManifest manifest = new ComicManifest(
+        return new ComicManifest(
                 ComicManifest.SCHEMA_VERSION,
                 project.getContentUid(),
                 project.getTitle(),
@@ -220,27 +218,31 @@ public class PublicationService {
                 project.getColorMode(),
                 project.getStatus() != null && project.getStatus() == Project.STATUS_DONE,
                 manifestChapters);
+    }
 
-        try {
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            ZipOutputStream zip = new ZipOutputStream(bos);
+    /** Phase 8.8 §10.1:流式写 ZIP —— 图片通过 RemoteImageFetcher 流式拉取,内存仅当前缓冲块 */
+    public void writeZip(Long projectId, java.io.OutputStream out) {
+        ComicManifest manifest = buildManifest(projectId);
+        try (ZipOutputStream zip = new ZipOutputStream(out)) {
             zip.putNextEntry(new ZipEntry("manifest.json"));
             zip.write(objectMapper.writerWithDefaultPrettyPrinter()
-                    .writeValueAsString(manifest).getBytes(StandardCharsets.UTF_8));
+                    .writeValueAsString(manifest).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             zip.closeEntry();
-            // 成品页图片归档
-            for (ComicManifestChapter chapter : manifestChapters) {
+            int pages = 0;
+            for (ComicManifestChapter chapter : manifest.chapters()) {
                 for (ComicManifestPage page : chapter.pages()) {
-                    byte[] image = fetchImage(page.imageUrl());
                     zip.putNextEntry(new ZipEntry(page.filePath()));
-                    zip.write(image);
+                    try (RemoteImageFetcher.FetchResult fetch = remoteImageFetcher.fetchStream(page.imageUrl());
+                         InputStream in = fetch.inputStream()) {
+                        in.transferTo(zip);
+                    }
                     zip.closeEntry();
+                    pages++;
                 }
             }
             zip.finish();
-            log.info("[export] 作品 {} 导出完成: {} 话 / {} 页", projectId, manifestChapters.size(),
-                    manifestChapters.stream().mapToInt(c -> c.pages().size()).sum());
-            return bos.toByteArray();
+            log.info("[export] 作品 {} 流式导出完成: {} 话 / {} 页", projectId,
+                    manifest.chapters().size(), pages);
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
@@ -248,22 +250,8 @@ public class PublicationService {
         }
     }
 
-    private byte[] fetchImage(String url) {
-        try {
-            HttpResponse<byte[]> response = http.send(HttpRequest.newBuilder()
-                            .uri(URI.create(url))
-                            .timeout(Duration.ofSeconds(30))
-                            .GET().build(),
-                    HttpResponse.BodyHandlers.ofByteArray());
-            if (response.statusCode() != 200) {
-                throw new BusinessException(500, "拉取页面图片失败(" + response.statusCode() + "): " + url);
-            }
-            return response.body();
-        } catch (BusinessException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new BusinessException(500, "拉取页面图片失败: " + url + " (" + e.getMessage() + ")");
-        }
+    private static String safeStr(String s) {
+        return s == null ? "" : s;
     }
 
     private static double orZero(Double v) {

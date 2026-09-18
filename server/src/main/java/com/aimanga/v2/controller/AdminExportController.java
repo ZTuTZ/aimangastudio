@@ -76,8 +76,9 @@ public class AdminExportController {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("projectId", projectId);
             try {
-                byte[] zip = publicationService.exportZip(projectId);
-                packages.put("comic-" + projectId + ".zip", zip);
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                publicationService.writeZip(projectId, bos);
+                packages.put("comic-" + projectId + ".zip", bos.toByteArray());
                 item.put("exported", true);
                 success++;
             } catch (Exception e) {
