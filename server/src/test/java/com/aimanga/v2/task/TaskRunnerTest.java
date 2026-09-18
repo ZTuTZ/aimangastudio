@@ -35,13 +35,17 @@ class TaskRunnerTest {
         publisher = mock(TaskEventPublisher.class);
         handler = mock(TaskHandler.class);
         when(handler.type()).thenReturn("MOCK");
-        runner = new TaskRunner(mapper, publisher, List.of(handler));
+        com.aimanga.v2.service.ConfigService configService = mock(com.aimanga.v2.service.ConfigService.class);
+        when(configService.getInt(org.mockito.ArgumentMatchers.eq("task_lease_seconds"), org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(90);
+        runner = new TaskRunner(mapper, publisher, List.of(handler), configService);
         task = new TaskEntity();
         task.setId(1L);
         task.setUserId(9L);
         task.setTaskType("MOCK");
         task.setStatus(TaskStatus.PENDING);
-        when(mapper.claim(eq(1L), anyString())).thenReturn(1);
+        when(mapper.claim(org.mockito.ArgumentMatchers.eq(1L), anyString(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyInt())).thenReturn(1);
         when(mapper.selectById(1L)).thenReturn(task);
     }
 
@@ -118,7 +122,7 @@ class TaskRunnerTest {
 
     @Test
     void claimFailure_skipsHandler() throws Exception {
-        when(mapper.claim(eq(1L), anyString())).thenReturn(0);
+        when(mapper.claim(org.mockito.ArgumentMatchers.eq(1L), anyString(), org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(0);
         runner.run(1L);
         verify(handler, never()).run(any(), any());
     }

@@ -1,11 +1,8 @@
 package com.aimanga.v2.task;
 
-import com.aimanga.v2.model.PipelineStage;
 import com.aimanga.v2.model.TaskEntity;
-import com.aimanga.v2.pipeline.PipelineStageService;
 import com.aimanga.v2.repository.TaskMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -15,10 +12,12 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * 重启恢复(Phase 5.7 增强):
- * 1. 清除毒丸残留 + 重置信号量;
- * 2. 查询 Pipeline Stage 确定恢复点 —— 已 SUCCESS 的阶段跳过;
- * 3. 未完成任务重新入队。
+ * 重启恢复(Phase 8.4 §6.7 重写,多实例安全):
+ * - PENDING  → enqueueIfAbsent(补入队;marker 去重);
+ * - RUNNING  → 不修改!等多实例 lease/看门狗接管(本实例启动不得重置其他实例正在执行的任务);
+ * - STOPPING → 不转 PENDING(用户停止意图不可丢失;Worker 失联由看门狗判定 → STOPPED);
+ * - PAUSED   → 不动(用户不点继续,永不自动恢复)。
+ * 原先"启动把 RUNNING/STOPPING 全改 PENDING"的单实例思路已废弃。
  */
 @Slf4j
 @Component
@@ -28,29 +27,24 @@ public class TaskRecovery implements ApplicationRunner {
     private final TaskMapper taskMapper;
     private final TaskQueue taskQueue;
     private final com.aimanga.v2.task.RedisSemaphores semaphores;
-    private final PipelineStageService stageService;
 
     @Override
     public void run(ApplicationArguments args) {
-        // 1. 清除毒丸
+        // 1. 清除毒丸(8.5 将移除毒丸机制)
         taskQueue.purgePoison();
-        // 2. 重置信号量
+        // 2. 重置信号量(临时保留;Phase 8.6 Limiter 上线后移除 —— 多实例不能清他实例限制状态)
         semaphores.resetAll();
-        // 3. 未完成任务重新入队(保留 pipeline stage,Handler 内部根据已有数据跳过已完成步骤)
-        List<TaskEntity> active = taskMapper.selectList(new LambdaQueryWrapper<TaskEntity>()
-                .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.STOPPING)
+        // 3. 仅补齐 PENDING 的入队(marker 去重;RUNNING/STOPPING/PAUSED 一律不动)
+        List<TaskEntity> pending = taskMapper.selectList(new LambdaQueryWrapper<TaskEntity>()
+                .eq(TaskEntity::getStatus, TaskStatus.PENDING)
                 .orderByAsc(TaskEntity::getId));
-        for (TaskEntity task : active) {
-            taskMapper.update(null, new LambdaUpdateWrapper<TaskEntity>()
-                    .eq(TaskEntity::getId, task.getId())
-                    .set(TaskEntity::getStatus, TaskStatus.PENDING)
-                    .set(TaskEntity::getError, "")
-                    .set(TaskEntity::getClaimToken, null)
-                    .set(TaskEntity::getHeartbeatTime, null));
-            taskQueue.enqueue(task.getId());
+        int enqueued = 0;
+        for (TaskEntity task : pending) {
+            if (taskQueue.enqueueIfAbsent(task.getId())) {
+                enqueued++;
+            }
         }
-        if (!active.isEmpty()) {
-            log.info("[task] 重启恢复:已重新入队 {} 个未完成任务(已完成 Pipeline Stage 不会被重跑)", active.size());
-        }
+        log.info("[recovery] 启动恢复: PENDING 补入队 {}/{},RUNNING/STOPPING/PAUSED 交由 lease/watchdog 管理",
+                enqueued, pending.size());
     }
 }

@@ -106,6 +106,7 @@ public class TaskWorkerPool {
             if (taskId == TaskQueue.POISON_PILL) {
                 return;
             }
+            taskQueue.removeMarker(taskId); // Phase 8.4:入队标记随取出清除
             try {
                 executeWithPermit(taskId);
             } catch (Exception e) {

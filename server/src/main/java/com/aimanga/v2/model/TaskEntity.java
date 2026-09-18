@@ -59,6 +59,15 @@ public class TaskEntity {
     /** 任务执行锁:领取时生成,终态写入时校验,防止双 Worker/看门狗互踩 */
     private String claimToken;
 
+    /** 执行租约截止(Phase 8.4 多实例安全) */
+    private java.time.LocalDateTime leaseUntil;
+
+    /** 执行实例(Phase 8.4) */
+    private String workerInstanceId;
+
+    /** 单次 Attempt 最大执行时间(秒) */
+    private Integer maxExecutionSeconds;
+
     /** 看门狗自动重试次数 */
     private Integer retryCount;
 

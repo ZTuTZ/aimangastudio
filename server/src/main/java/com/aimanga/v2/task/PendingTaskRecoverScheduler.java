@@ -27,8 +27,9 @@ public class PendingTaskRecoverScheduler {
     public void recoverStalePendingTasks() {
         List<TaskEntity> stale = taskMapper.selectStalePending();
         for (TaskEntity task : stale) {
-            taskQueue.enqueue(task.getId());
-            log.info("[task] Redis 补偿:排队超时的任务重新入队 taskId={} type={}", task.getId(), task.getTaskType());
+            if (taskQueue.enqueueIfAbsent(task.getId())) {
+                log.info("[task] Redis 补偿:排队超时的任务重新入队 taskId={} type={}", task.getId(), task.getTaskType());
+            }
         }
     }
 }

@@ -30,6 +30,7 @@ public class TaskRunner {
     private final TaskMapper taskMapper;
     private final TaskEventPublisher publisher;
     private final Map<String, TaskHandler> handlers;
+    private final com.aimanga.v2.service.ConfigService configService;
     private final java.util.concurrent.ScheduledExecutorService heartbeatScheduler =
             java.util.concurrent.Executors.newScheduledThreadPool(1, r -> {
                 Thread t = new Thread(r, "task-heartbeat");
@@ -37,11 +38,16 @@ public class TaskRunner {
                 return t;
             });
 
-    public TaskRunner(TaskMapper taskMapper, TaskEventPublisher publisher, List<TaskHandler> handlerList) {
+    /** 本 JVM 实例 ID(Phase 8.4 多实例标识) */
+    private static final String INSTANCE_ID = java.util.UUID.randomUUID().toString();
+
+    public TaskRunner(TaskMapper taskMapper, TaskEventPublisher publisher, List<TaskHandler> handlerList,
+                      com.aimanga.v2.service.ConfigService configService) {
         this.taskMapper = taskMapper;
         this.publisher = publisher;
         this.handlers = handlerList.stream().collect(Collectors.toMap(TaskHandler::type, Function.identity()));
-        log.info("[task] 已注册任务处理器: {}", handlers.keySet());
+        this.configService = configService;
+        log.info("[task] 已注册任务处理器: {} (instance={})", handlers.keySet(), INSTANCE_ID);
     }
 
     public void run(long taskId) {
@@ -51,7 +57,8 @@ public class TaskRunner {
         }
         // Phase 5.6 原子领取:生成执行锁,仅当仍为排队中时领取成功
         String claimToken = java.util.UUID.randomUUID().toString().replace("-", "");
-        if (taskMapper.claim(taskId, claimToken) == 0) {
+        int leaseSeconds = configService.getInt("task_lease_seconds", 90);
+        if (taskMapper.claim(taskId, claimToken, INSTANCE_ID, leaseSeconds) == 0) {
             return;
         }
         TaskEntity running = taskMapper.selectById(taskId);
@@ -61,8 +68,12 @@ public class TaskRunner {
         TaskRuntime runtime = new TaskRuntime(taskMapper, publisher, running);
 
         // 30 秒心跳:看门狗据此区分"仍在执行"与"僵尸"
-        ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(
-                () -> taskMapper.heartbeat(taskId, claimToken),
+        ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(() -> {
+                    // Phase 8.4:心跳 CAS + 续租
+                    if (taskMapper.heartbeat(taskId, claimToken, leaseSeconds) == 0) {
+                        log.warn("[task] 心跳续租失败(执行锁已失效) taskId={}", taskId);
+                    }
+                },
                 HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_INTERVAL_SECONDS, TimeUnit.SECONDS);
 
         try {

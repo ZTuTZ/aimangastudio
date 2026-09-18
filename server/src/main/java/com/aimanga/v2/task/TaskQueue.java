@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
 public class TaskQueue {
 
     public static final String QUEUE_KEY = "aimanga:v2:task:queue";
+    public static final String MARKER_KEY_PREFIX = "aimanga:v2:task:queued:";
     /** 毒丸:通知 worker 线程退出(池缩容用) */
     public static final long POISON_PILL = -1L;
 
@@ -23,6 +24,21 @@ public class TaskQueue {
 
     private RBlockingQueue<Long> queue() {
         return redissonClient.getBlockingQueue(QUEUE_KEY);
+    }
+
+    /** 入队标记(Phase 8.4 §6.8):SET NX TTL,防止 Recovery/补偿/重试 重复入队 */
+    public boolean enqueueIfAbsent(long taskId) {
+        var bucket = redissonClient.getBucket(MARKER_KEY_PREFIX + taskId);
+        if (!bucket.setIfAbsent("1", java.time.Duration.ofSeconds(120))) {
+            return false; // 已有相同任务在队列中(或刚被 Worker 取走)
+        }
+        queue().add(taskId);
+        return true;
+    }
+
+    /** Worker 取出任务后删除入队标记(Phase 8.4 §6.8) */
+    public void removeMarker(long taskId) {
+        redissonClient.getBucket(MARKER_KEY_PREFIX + taskId).delete();
     }
 
     /** 队列当前长度(监控用,Phase 7.2) */

@@ -11,18 +11,46 @@ import java.util.List;
 
 public interface TaskMapper extends BaseMapper<TaskEntity> {
 
-    /** 乐观锁领取:仅当仍为排队中时置为进行中,记录开始时间与执行锁 */
-    @Update("UPDATE task SET status = 1, claim_token = #{token}, heartbeat_time = NOW(), start_time = NOW() " +
+    /** 乐观锁领取(Phase 8.4):记录执行实例 + 执行租约(lease_until=NOW()+task_lease_seconds) */
+    @Update("UPDATE task SET status = 1, claim_token = #{token}, heartbeat_time = NOW(), start_time = NOW(), " +
+            "worker_instance_id = #{instanceId}, " +
+            "lease_until = DATE_ADD(NOW(), INTERVAL #{leaseSeconds} SECOND) " +
             "WHERE id = #{id} AND status = 0")
-    int claim(@Param("id") Long id, @Param("token") String token);
+    int claim(@Param("id") Long id, @Param("token") String token,
+              @Param("instanceId") String instanceId, @Param("leaseSeconds") int leaseSeconds);
 
-    /** Worker 心跳:仅持有执行锁的进行中任务可刷新 */
-    @Update("UPDATE task SET heartbeat_time = NOW() WHERE id = #{id} AND claim_token = #{token} AND status = 1")
-    int heartbeat(@Param("id") Long id, @Param("token") String token);
+    /** Worker 心跳(Phase 8.4 CAS):刷新心跳并续租;仅当前 claim_token 持有者 */
+    @Update("UPDATE task SET heartbeat_time = NOW(), " +
+            "lease_until = DATE_ADD(NOW(), INTERVAL #{leaseSeconds} SECOND) " +
+            "WHERE id = #{id} AND claim_token = #{token} AND status = 1")
+    int heartbeat(@Param("id") Long id, @Param("token") String token, @Param("leaseSeconds") int leaseSeconds);
+
+    /** 终态/暂停写入后清租约 */
+    @Update("UPDATE task SET lease_until = NULL, worker_instance_id = NULL WHERE id = #{id} " +
+            "AND claim_token IS NULL")
+    int clearLease(@Param("id") Long id);
+
+    /** Phase 8.4 双超时扫描:租约过期(Worker失联) 或 执行超时(有心跳但运行过久) */
+    @Select("SELECT * FROM task WHERE status = 1 AND (" +
+            "lease_until IS NOT NULL AND lease_until < NOW() OR " +
+            "max_execution_seconds IS NOT NULL AND start_time IS NOT NULL " +
+            "AND start_time < DATE_SUB(NOW(), INTERVAL max_execution_seconds SECOND))")
+    List<TaskEntity> selectLeaseOrExecutionTimeout();
+
+    /** STOPPING 僵尸(Phase 8.4 §6.6):用户停止意图不可丢失,Worker 已死 → 直接 STOPPED */
+    @Select("SELECT * FROM task WHERE status = 6 AND claim_token IS NOT NULL " +
+            "AND heartbeat_time < DATE_SUB(NOW(), INTERVAL 90 SECOND)")
+    List<TaskEntity> selectStoppingZombies();
+
+    @Update("UPDATE task SET status = 5, error = '已停止(Worker 失联)', end_time = NOW(), " +
+            "claim_token = NULL, heartbeat_time = NULL, lease_until = NULL WHERE id = #{id} " +
+            "AND status = 6 AND claim_token = #{token}")
+    int stopZombie(@Param("id") Long id, @Param("token") String token);
 
     /** 终态写入:带执行锁校验,防止看门狗/双 Worker 互踩 */
     @Update("UPDATE task SET status = #{status}, progress = #{progress}, error = #{error}, " +
-            "last_error = #{error}, end_time = NOW(), claim_token = NULL, heartbeat_time = NULL " +
+            "last_error = #{error}, end_time = NOW(), claim_token = NULL, heartbeat_time = NULL, " +
+            "lease_until = NULL, worker_instance_id = NULL " +
             "WHERE id = #{id} AND claim_token = #{token} AND status IN (1, 6)")
     int finishTask(@Param("id") Long id, @Param("token") String token, @Param("status") int status,
                    @Param("progress") int progress, @Param("error") String error);
@@ -44,6 +72,17 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
             "AND heartbeat_time < DATE_SUB(NOW(), INTERVAL timeout_seconds SECOND)")
     List<TaskEntity> selectZombies();
 
+    /** 租约/执行超时的回收(Phase 8.4):以 claim_token 为围栏,不看心跳时间 */
+    @Update("UPDATE task SET status = 0, claim_token = NULL, heartbeat_time = NULL, " +
+            "lease_until = NULL, worker_instance_id = NULL, error = #{error}, last_error = #{error} " +
+            "WHERE id = #{id} AND claim_token = #{token} AND status = 1")
+    int requeueRevoked(@Param("id") Long id, @Param("token") String token, @Param("error") String error);
+
+    @Update("UPDATE task SET status = 3, claim_token = NULL, heartbeat_time = NULL, end_time = NOW(), " +
+            "lease_until = NULL, worker_instance_id = NULL, error = #{error}, last_error = #{error} " +
+            "WHERE id = #{id} AND claim_token = #{token} AND status = 1")
+    int failRevoked(@Param("id") Long id, @Param("token") String token, @Param("error") String error);
+
     /** Redis 补偿:扫描长时间排队但未被执行的任务(create_time 超过 60 秒仍在排队) */
     @Select("SELECT * FROM task WHERE status = 0 AND create_time < DATE_SUB(NOW(), INTERVAL 60 SECOND)")
     List<TaskEntity> selectStalePending();
@@ -59,7 +98,8 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
               AND (#{keyword} IS NULL OR p.title LIKE CONCAT('%', #{keyword}, '%'))
             """)
     /** 暂停任务(Phase 8.3):RUNNING → PAUSED,保留 payload/进度/计数,清执行锁与心跳 */
-    @Update("UPDATE task SET status = 7, claim_token = NULL, heartbeat_time = NULL " +
+    @Update("UPDATE task SET status = 7, claim_token = NULL, heartbeat_time = NULL, " +
+            "lease_until = NULL, worker_instance_id = NULL " +
             "WHERE id = #{id} AND claim_token = #{claimToken} AND status = 1")
     int pauseTask(@Param("id") Long id, @Param("claimToken") String claimToken);
 

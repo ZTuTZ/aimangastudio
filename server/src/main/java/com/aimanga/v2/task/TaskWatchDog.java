@@ -10,11 +10,11 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * 僵尸任务看门狗(Phase 5.6):
- * 每 30 秒扫描"进行中但心跳超时"的任务(Worker 崩溃/强杀导致):
- * - retry_count < max_retry_count → 重新排队(自动重试次数 +1,执行锁/心跳清空);
- * - 超过次数 → 失败。
- * 原 Worker 若仍存活,其终态写入会因执行锁失效被自动跳过。
+ * 僵尸任务看门狗(Phase 8.4 §6.5 双超时):
+ * ① 租约超时(lease_until < NOW)→ Worker 失联,回收重试/失败;
+ * ② 执行超时(start_time + max_execution_seconds < NOW)→ Worker 有心跳但本次 Attempt 运行过久;
+ * ③ STOPPING 僵尸(Phase 8.4 §6.6)→ Worker 失联,直接 STOPPED(用户停止意图不可丢失)。
+ * 旧执行晚回来由 Phase 8.1 fencing 拦截,不覆盖最新结果。
  */
 @Slf4j
 @Component
@@ -26,25 +26,45 @@ public class TaskWatchDog {
 
     @Scheduled(fixedDelay = 30_000, initialDelay = 30_000)
     public void detectZombies() {
-        List<TaskEntity> zombies = taskMapper.selectZombies();
-        for (TaskEntity zombie : zombies) {
-            String token = zombie.getClaimToken();
-            if (token == null) continue;
-            int retryCount = zombie.getRetryCount() == null ? 0 : zombie.getRetryCount();
-            int maxRetry = zombie.getMaxRetryCount() == null ? 3 : zombie.getMaxRetryCount();
-            String error = "执行超时(心跳超过 " + zombie.getTimeoutSeconds() + " 秒,判定 Worker 已失联)";
-            if (retryCount < maxRetry) {
-                int updated = taskMapper.requeueZombie(zombie.getId(), token, error);
-                if (updated > 0) {
-                    log.warn("[watchdog] 僵尸任务重新排队 taskId={} retry={}/{}", zombie.getId(), retryCount + 1, maxRetry);
-                    taskQueue.enqueue(zombie.getId());
-                }
-            } else {
-                int updated = taskMapper.failZombie(zombie.getId(), token, error);
-                if (updated > 0) {
-                    log.error("[watchdog] 僵尸任务超过最大重试次数,判定失败 taskId={} retry={}/{}",
-                            zombie.getId(), retryCount, maxRetry);
-                }
+        // ① 心跳超时(原有路径)
+        for (TaskEntity zombie : taskMapper.selectZombies()) {
+            handle(zombie, "执行超时(心跳超过 " + zombie.getTimeoutSeconds() + " 秒,判定 Worker 已失联)");
+        }
+        // ② 租约过期 / 执行超时(Phase 8.4)
+        for (TaskEntity task : taskMapper.selectLeaseOrExecutionTimeout()) {
+            boolean leaseExpired = task.getLeaseUntil() != null
+                    && task.getLeaseUntil().isBefore(java.time.LocalDateTime.now());
+            handle(task, leaseExpired
+                    ? "租约过期(Worker 失联,Phase 8.4)"
+                    : "执行超时(超过 max_execution_seconds=" + task.getMaxExecutionSeconds() + " 秒,Phase 8.4)");
+        }
+        // ③ STOPPING 僵尸 → STOPPED(§6.6)
+        for (TaskEntity task : taskMapper.selectStoppingZombies()) {
+            if (task.getClaimToken() == null) continue;
+            int updated = taskMapper.stopZombie(task.getId(), task.getClaimToken());
+            if (updated > 0) {
+                log.warn("[watchdog] STOPPING 僵尸任务判定 STOPPED taskId={}", task.getId());
+            }
+        }
+    }
+
+    private void handle(TaskEntity task, String error) {
+        String token = task.getClaimToken();
+        if (token == null) return;
+        int retryCount = task.getRetryCount() == null ? 0 : task.getRetryCount();
+        int maxRetry = task.getMaxRetryCount() == null ? 3 : task.getMaxRetryCount();
+        if (retryCount < maxRetry) {
+            int updated = taskMapper.requeueRevoked(task.getId(), token, error);
+            if (updated > 0) {
+                log.warn("[watchdog] 任务回收重新排队 taskId={} retry={}/{}: {}",
+                        task.getId(), retryCount + 1, maxRetry, error);
+                taskQueue.enqueue(task.getId());
+            }
+        } else {
+            int updated = taskMapper.failRevoked(task.getId(), token, error);
+            if (updated > 0) {
+                log.error("[watchdog] 任务超过最大重试次数,判定失败 taskId={} retry={}/{}",
+                        task.getId(), retryCount, maxRetry);
             }
         }
     }
