@@ -30,9 +30,7 @@ public class TaskRecovery implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        // 1. 清除毒丸(8.5 将移除毒丸机制)
-        taskQueue.purgePoison();
-        // 2. 重置信号量(临时保留;Phase 8.6 Limiter 上线后移除 —— 多实例不能清他实例限制状态)
+        // 信号量重置(临时保留;Phase 8.6 Limiter 上线后移除 —— 多实例不能清他实例限制状态)
         semaphores.resetAll();
         // 3. 仅补齐 PENDING 的入队(marker 去重;RUNNING/STOPPING/PAUSED 一律不动)
         List<TaskEntity> pending = taskMapper.selectList(new LambdaQueryWrapper<TaskEntity>()

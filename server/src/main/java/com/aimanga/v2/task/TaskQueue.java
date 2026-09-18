@@ -18,7 +18,6 @@ public class TaskQueue {
     public static final String QUEUE_KEY = "aimanga:v2:task:queue";
     public static final String MARKER_KEY_PREFIX = "aimanga:v2:task:queued:";
     /** 毒丸:通知 worker 线程退出(池缩容用) */
-    public static final long POISON_PILL = -1L;
 
     private final RedissonClient redissonClient;
 
@@ -58,27 +57,15 @@ public class TaskQueue {
     }
 
     /** 阻塞获取(可被线程中断打断以支持池缩容) */
+    /** Phase 8.5 §7.2:超时轮询(替代阻塞 take,Worker 退出不再依赖毒丸) */
+    public Long poll(long timeout, java.util.concurrent.TimeUnit unit) throws InterruptedException {
+        return queue().poll(timeout, unit);
+    }
+
     public long take() throws InterruptedException {
         Long taskId = queue().take();
-        return taskId == null ? POISON_PILL : taskId;
-    }
-
-    /** 投递毒丸(每个 worker 线程一颗) */
-    public void poison(int count) {
-        for (int i = 0; i < count; i++) {
-            queue().add(POISON_PILL);
-        }
-    }
-
-    /** 移除一颗毒丸;返回是否存在并移除(启动时清理上次停机残留) */
-    public boolean removePoison() {
-        return queue().remove(POISON_PILL);
+        return taskId;
     }
 
     /** 清除全部残留毒丸(启动恢复时调用) */
-    public void purgePoison() {
-        while (queue().remove(POISON_PILL)) {
-            // 循环移除直到没有
-        }
-    }
 }

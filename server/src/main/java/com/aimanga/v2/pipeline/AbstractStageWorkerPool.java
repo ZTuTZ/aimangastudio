@@ -69,9 +69,15 @@ public abstract class AbstractStageWorkerPool {
         if (target == currentSize) {
             return;
         }
-        // 平滑扩缩容:扩容立即生效;缩容后多余 Worker 空闲 60s 自动退出
-        pool.setMaximumPoolSize(target);
-        pool.setCorePoolSize(target);
+        // 平滑扩缩容(Phase 8.5 §7.5:顺序敏感)
+        // 扩容:先 max 后 core;缩容:先 core 后 max(避免 core > max 抛 IllegalArgumentException)
+        if (target > currentSize) {
+            pool.setMaximumPoolSize(target);
+            pool.setCorePoolSize(target);
+        } else {
+            pool.setCorePoolSize(target);
+            pool.setMaximumPoolSize(target);
+        }
         log.info("[stage-pool] {} 并发 {} → {}(热更新)", threadNamePrefix(), currentSize, target);
         currentSize = target;
     }
