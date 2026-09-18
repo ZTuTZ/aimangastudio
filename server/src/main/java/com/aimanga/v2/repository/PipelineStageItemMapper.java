@@ -11,17 +11,44 @@ import java.util.List;
 public interface PipelineStageItemMapper extends BaseMapper<PipelineStageItem> {
 
     /**
-     * Phase 5.9 Item 原子领取:PENDING(0) → RUNNING(1)。
-     * 影响行数=1 领取成功;=0 说明已被其他 Worker 领取(或状态已变化),必须跳过。
+     * Phase 8.1 Attempt Fencing 原子领取:PENDING → RUNNING,同时写入 attempt 代次与 token。
+     * 影响行数=1 领取成功;=0 已被其他 Worker 领取(或状态已变化)。
      */
-    @Update("UPDATE pipeline_stage_item SET status = 1, update_time = NOW() " +
+    @Update("UPDATE pipeline_stage_item SET status = 1, attempt_no = attempt_no + 1, " +
+            "attempt_token = #{attemptToken}, claimed_at = NOW(), update_time = NOW() " +
             "WHERE id = #{id} AND status = 0")
-    int claim(@Param("id") Long id);
+    int claim(@Param("id") Long id, @Param("attemptToken") String attemptToken);
 
-    /** 释放领取:RUNNING(1) → PENDING(0)。用于用户停止/暂停时归还在跑 Item,下次重跑继续。 */
-    @Update("UPDATE pipeline_stage_item SET status = 0, update_time = NOW() " +
-            "WHERE id = #{id} AND status = 1")
-    int release(@Param("id") Long id);
+    /**
+     * Fenced 释放:RUNNING → PENDING。仅当前 token 持有者可释放;
+     * 影响行数=0 说明 token 已失效(被新 Attempt 接管),调用方必须放弃本次执行结果。
+     */
+    @Update("UPDATE pipeline_stage_item SET status = 0, attempt_token = NULL, claimed_at = NULL, update_time = NOW() " +
+            "WHERE id = #{id} AND status = 1 AND attempt_token = #{attemptToken}")
+    int release(@Param("id") Long id, @Param("attemptToken") String attemptToken);
+
+    /** Fenced 重试:RUNNING → PENDING + retry_count+1(仅当前 token) */
+    @Update("UPDATE pipeline_stage_item SET status = 0, error_message = #{error}, " +
+            "retry_count = retry_count + 1, attempt_token = NULL, claimed_at = NULL, update_time = NOW() " +
+            "WHERE id = #{id} AND status = 1 AND attempt_token = #{attemptToken}")
+    int markRetry(@Param("id") Long id, @Param("attemptToken") String attemptToken, @Param("error") String error);
+
+    /** Fenced 终态失败:RUNNING → FAILED(仅当前 token) */
+    @Update("UPDATE pipeline_stage_item SET status = 3, error_message = #{error}, finish_time = NOW(), " +
+            "attempt_token = NULL, update_time = NOW() " +
+            "WHERE id = #{id} AND status = 1 AND attempt_token = #{attemptToken}")
+    int markFailed(@Param("id") Long id, @Param("attemptToken") String attemptToken, @Param("error") String error);
+
+    /** Fenced 成功:RUNNING → SUCCESS(仅当前 token) */
+    @Update("UPDATE pipeline_stage_item SET status = 2, result_ref = #{resultRef}, finish_time = NOW(), " +
+            "attempt_token = NULL, update_time = NOW() " +
+            "WHERE id = #{id} AND status = 1 AND attempt_token = #{attemptToken}")
+    int markSuccess(@Param("id") Long id, @Param("attemptToken") String attemptToken,
+                    @Param("resultRef") String resultRef);
+
+    /** FOR UPDATE 行锁读取(fenced commit 事务内使用,Phase 8.1) */
+    @Select("SELECT * FROM pipeline_stage_item WHERE id = #{id} FOR UPDATE")
+    PipelineStageItem lockById(@Param("id") Long id);
 
     /** 按业务序号取一批 PENDING Item id(喂给 Worker 池的候选队列) */
     @Select("SELECT id FROM pipeline_stage_item " +
@@ -36,4 +63,9 @@ public interface PipelineStageItemMapper extends BaseMapper<PipelineStageItem> {
             "WHERE project_id = #{projectId} AND stage_type = #{stageType} GROUP BY status")
     List<java.util.Map<String, Object>> selectStatusCounts(@Param("projectId") Long projectId,
                                                            @Param("stageType") String stageType);
+
+    /** 页级归属校验:该 item 是否属于指定页(fenced commit 用) */
+    @Select("SELECT id FROM pipeline_stage_item " +
+            "WHERE id = #{id} AND attempt_token = #{attemptToken} AND status = 1")
+    Long findRunningWithToken(@Param("id") Long id, @Param("attemptToken") String attemptToken);
 }

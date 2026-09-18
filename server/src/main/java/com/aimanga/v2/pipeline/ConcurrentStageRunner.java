@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -57,10 +58,11 @@ public class ConcurrentStageRunner {
         this.redissonClient = redissonClient;
     }
 
-    /** 单 Item 处理器:输入 Item,输出结果引用 JSON;抛异常触发重试/终态失败 */
+    /** 单 Item 处理器:输入执行上下文(Item + fencing token),输出结果引用 JSON;
+     *  正式业务结果必须经 StageItemCommitService.commitFenced 提交,旧 Attempt 会被拒绝 */
     @FunctionalInterface
     public interface StageItemProcessor {
-        String process(PipelineStageItem item) throws Exception;
+        String process(StageItemExecution execution) throws Exception;
     }
 
     /**
@@ -80,6 +82,13 @@ public class ConcurrentStageRunner {
 
     /** 引擎执行结果 */
     public record StageRunResult(int success, int failed, int retried, boolean paused) {}
+
+    /** stale 提交拒绝计数(Phase 8.1 fencing 观测) */
+    public long lastRunStaleRejected() {
+        return lastStaleRejected.get();
+    }
+
+    private final AtomicLong lastStaleRejected = new AtomicLong();
 
     public StageRunResult run(Long projectId, String stageType, TaskRuntime runtime, StageItemProcessor processor,
                               StageEngine engine) {
@@ -124,6 +133,7 @@ public class ConcurrentStageRunner {
         AtomicInteger retried = new AtomicInteger();
         AtomicBoolean paused = new AtomicBoolean(false);
         AtomicBoolean stopped = new AtomicBoolean(false);
+        AtomicLong staleRejected = new AtomicLong();
 
         log.info("[stage] {} {} 并发执行开始: 并发={}, maxRetry={}", projectId, stageType, concurrency, maxRetry);
 
@@ -141,16 +151,18 @@ public class ConcurrentStageRunner {
             }
             int capacity = concurrency - inFlight.get();
             while (capacity > 0) {
-                PipelineStageItem item = claimNext(projectId, stageType, claimed);
+                String attemptToken = java.util.UUID.randomUUID().toString().replace("-", "");
+                PipelineStageItem item = claimNext(projectId, stageType, claimed, attemptToken);
                 if (item == null) {
                     break;
                 }
                 inFlight.incrementAndGet();
+                StageItemExecution execution = new StageItemExecution(item, attemptToken);
                 try {
                     engine.pool().submit(() -> {
                         try {
-                            processItem(projectId, stageType, runtime, processor, item, maxRetry,
-                                    claimed, inFlight, success, failed, retried, paused, stopped);
+                            processItem(projectId, stageType, runtime, processor, execution, maxRetry,
+                                    claimed, inFlight, success, failed, retried, paused, stopped, staleRejected);
                         } catch (Throwable t) {
                             // 兜底:processItem 内部已捕获 Exception,这里只防 Error 静默丢失(inFlight 已在其 finally 归还)
                             log.error("[stage] {} Item {} Worker 未捕获异常", stageType, item.getId(), t);
@@ -160,7 +172,7 @@ public class ConcurrentStageRunner {
                     // 理论不可达(Runner 按余量领取,队列不积压);兜底:归还 Item,下轮重领
                     inFlight.decrementAndGet();
                     claimed.remove(item.getId());
-                    stageService.releaseItem(item.getId());
+                    stageService.releaseItem(item.getId(), attemptToken);
                     log.warn("[stage] {} 提交失败已归还 Item {}: {}", stageType, item.getId(), e.getMessage());
                     break;
                 }
@@ -179,19 +191,22 @@ public class ConcurrentStageRunner {
             throw new TaskStopSignal();
         }
         StageRunResult result = new StageRunResult(success.get(), failed.get(), retried.get(), paused.get());
+        if (staleRejected.get() > 0) {
+            log.warn("[stage] {} {} stale_commit_rejected 共 {} 次(fencing 生效)", projectId, stageType, staleRejected.get());
+        }
         log.info("[stage] {} {} 并发执行结束: 成功={} 失败={} 重试={} 暂停={}",
                 projectId, stageType, result.success(), result.failed(), result.retried(), result.paused());
         return result;
     }
 
-    /** 原子领取下一个待执行 Item(§5):领取失败(被抢)自动换下一个候选 */
-    private PipelineStageItem claimNext(Long projectId, String stageType, Set<Long> claimed) {
+    /** 原子领取下一个待执行 Item(§5 + Phase 8.1 fencing):领取失败(被抢)自动换下一个候选 */
+    private PipelineStageItem claimNext(Long projectId, String stageType, Set<Long> claimed, String attemptToken) {
         List<Long> candidates = stageService.getPendingItemIds(projectId, stageType, FEED_BATCH);
         for (Long id : candidates) {
             if (!claimed.add(id)) {
                 continue;
             }
-            if (stageService.claimItem(id)) {
+            if (stageService.claimItem(id, attemptToken)) {
                 PipelineStageItem item = stageService.getItem(id);
                 if (item != null) {
                     return item;
@@ -202,41 +217,58 @@ public class ConcurrentStageRunner {
         return null;
     }
 
-    /** Worker 执行体:单 Item 处理 → 成功/重试/终态失败(§6),不抛出异常(异常在内部消化为 Item 状态) */
+    /** Worker 执行体:单 Item 处理 → fenced 成功/重试/终态失败(§6+Phase 8.1),不抛出异常(异常在内部消化为 Item 状态) */
     private void processItem(Long projectId, String stageType, TaskRuntime runtime, StageItemProcessor processor,
-                             PipelineStageItem item, int maxRetry, Set<Long> claimed, AtomicInteger inFlight,
+                             StageItemExecution execution, int maxRetry, Set<Long> claimed, AtomicInteger inFlight,
                              AtomicInteger success, AtomicInteger failed, AtomicInteger retried,
-                             AtomicBoolean paused, AtomicBoolean stopped) {
+                             AtomicBoolean paused, AtomicBoolean stopped, AtomicLong staleRejected) {
+        PipelineStageItem item = execution.item();
+        String attemptToken = execution.attemptToken();
         try {
             runtime.checkStop();
             if (paused.get() || stopped.get()) {
                 // 领取后阶段被暂停/任务被停止:归还 Item,下次继续
-                stageService.releaseItem(item.getId());
+                stageService.releaseItem(item.getId(), attemptToken);
+                claimed.remove(item.getId());
                 return;
             }
-            String resultRef = processor.process(item);
-            stageService.markItemSuccess(item.getId(), resultRef); // §9 处理器内部已先保存 OSS/业务数据
+            String resultRef = processor.process(execution);
+            // Fenced 成功:0 行说明正式结果已由 commitFenced(更新 Attempt)写入,此处忽略
+            stageService.markItemSuccess(item.getId(), attemptToken, resultRef);
             success.incrementAndGet();
             runtime.stepSuccess();
             stageService.updateStageProgress(projectId, stageType);
+        } catch (StaleCommitRejectedException e) {
+            // Phase 8.1:旧 Attempt 提交被拒 —— 不计失败、不重试,Item 归更新的 Attempt 所有
+            staleRejected.incrementAndGet();
+            claimed.remove(item.getId());
+            log.warn("[stage] {} Item {} stale attempt 提交被拒(fencing 生效)", stageType, item.getId());
         } catch (TaskStopSignal s) {
-            stageService.releaseItem(item.getId());
+            stageService.releaseItem(item.getId(), attemptToken);
             claimed.remove(item.getId());
         } catch (Exception e) {
             int retryCount = item.getRetryCount() == null ? 0 : item.getRetryCount();
             String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             if (retryCount < maxRetry) {
-                // §6 失败重试:retry_count+1 → 回到 PENDING,下一轮重新领取执行
-                stageService.markItemRetry(item.getId(), message);
-                claimed.remove(item.getId());
-                retried.incrementAndGet();
-                log.warn("[stage] {} Item {} 第 {} 次失败将重试: {}", stageType, item.getId(), retryCount + 1, message);
-            } else {
-                stageService.markItemFailed(item.getId(), message);
+                // §6 失败重试:retry_count+1 → 回到 PENDING,下一轮重新领取执行(fenced:0 行=已被接管,放弃)
+                if (stageService.markItemRetry(item.getId(), attemptToken, message)) {
+                    claimed.remove(item.getId());
+                    retried.incrementAndGet();
+                    log.warn("[stage] {} Item {} 第 {} 次失败将重试: {}", stageType, item.getId(), retryCount + 1, message);
+                } else {
+                    staleRejected.incrementAndGet();
+                    claimed.remove(item.getId());
+                    log.warn("[stage] {} Item {} 重试提交被拒(stale attempt)", stageType, item.getId());
+                }
+            } else if (stageService.markItemFailed(item.getId(), attemptToken, message)) {
                 failed.incrementAndGet();
                 runtime.stepFail(message);
                 stageService.updateStageProgress(projectId, stageType);
                 log.warn("[stage] {} Item {} 重试 {} 次后仍失败: {}", stageType, item.getId(), retryCount, message);
+            } else {
+                staleRejected.incrementAndGet();
+                claimed.remove(item.getId());
+                log.warn("[stage] {} Item {} 失败提交被拒(stale attempt)", stageType, item.getId());
             }
         } finally {
             inFlight.decrementAndGet();

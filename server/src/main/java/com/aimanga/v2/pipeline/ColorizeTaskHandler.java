@@ -9,8 +9,9 @@ import org.springframework.stereotype.Component;
 public class ColorizeTaskHandler extends PostProcessTaskHandler {
 
     public ColorizeTaskHandler(PipelineContext ctx, PostProcessService postProcessService,
-                               PipelineStageService stageService, ConcurrentStageRunner stageRunner) {
-        super(ctx, postProcessService, stageService, stageRunner);
+                               PipelineStageService stageService, ConcurrentStageRunner stageRunner,
+                               StageItemCommitService commitService) {
+        super(ctx, postProcessService, stageService, stageRunner, commitService);
     }
 
     @Override

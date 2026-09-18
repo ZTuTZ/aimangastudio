@@ -36,6 +36,7 @@ public class AssetRefTaskHandler implements TaskHandler {
     private final AiService aiService;
     private final ConcurrentStageRunner stageRunner;
     private final PipelineStageService stageService;
+    private final StageItemCommitService commitService;
 
     @Override
     public String type() {
@@ -63,7 +64,7 @@ public class AssetRefTaskHandler implements TaskHandler {
         runtime.begin((int) before.pending());
 
         stageRunner.run(project.getId(), PipelineStageService.STAGE_REFERENCE, runtime,
-                item -> generateRef(project, item), stageRunner.imageEngine());
+                execution -> generateRef(project, execution), stageRunner.imageEngine());
 
         if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_REFERENCE)) {
             log.info("[asset-ref] 作品 {} 素材参考图暂停中,等待继续", project.getId());
@@ -80,14 +81,15 @@ public class AssetRefTaskHandler implements TaskHandler {
         }
     }
 
-    /** 单资产处理器:参考图生成(§9 幂等:先存 OSS → 更新资产 URL → 才标 Item 成功) */
-    private String generateRef(Project project, PipelineStageItem item) {
+    /** 单资产处理器:参考图生成(§9 幂等 + Phase 8.1 fenced commit) */
+    private String generateRef(Project project, StageItemExecution execution) {
+        PipelineStageItem item = execution.item();
+        boolean forceRegen = PipelineStageService.isForceRequested(item);
         Asset asset = ctx.assetMapper.selectById(item.getBusinessId());
         if (asset == null) {
             throw new BusinessException(404, "资产不存在: " + item.getBusinessId());
         }
         // 幂等(全量跑):已有参考图直接补标成功;用户手动重生成(force 标记,T5.11.1)强制重画
-        boolean forceRegen = PipelineStageService.isForceRequested(item);
         if (!forceRegen && asset.getReferenceUrl() != null && !asset.getReferenceUrl().isBlank()) {
             return resultRef(asset.getId(), asset.getReferenceUrl());
         }
@@ -106,13 +108,20 @@ public class AssetRefTaskHandler implements TaskHandler {
                     + "。画面只包含" + subject + "本身,不要文字、不要人物。";
             List<String> refs = sheetRefOf(asset);
             String url = aiService.generateImage("image", prompt, refs, ratio, project.getUserId());
-            Asset patch = new Asset();
-            patch.setId(asset.getId());
-            patch.setReferenceUrl(url);
-            patch.setGenStatus(Asset.GEN_IDLE);
-            patch.setUpdateTime(LocalDateTime.now());
-            ctx.assetMapper.updateById(patch);
-            return resultRef(asset.getId(), url);
+            // Phase 8.1 fenced commit:资产写入 + Item SUCCESS 同事务
+            var commit = commitService.commitFenced(execution, () -> {
+                Asset patch = new Asset();
+                patch.setId(asset.getId());
+                patch.setReferenceUrl(url);
+                patch.setGenStatus(Asset.GEN_IDLE);
+                patch.setUpdateTime(LocalDateTime.now());
+                ctx.assetMapper.updateById(patch);
+                return resultRef(asset.getId(), url);
+            });
+            if (!commit.committed()) {
+                throw new StaleCommitRejectedException(item.getId());
+            }
+            return commit.resultRef();
         } catch (Exception e) {
             Asset patch = new Asset();
             patch.setId(asset.getId());

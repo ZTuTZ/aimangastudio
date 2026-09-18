@@ -3,6 +3,7 @@ package com.aimanga.v2.pipeline;
 import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.Chapter;
 import com.aimanga.v2.model.PageEntity;
+import com.aimanga.v2.model.GenerationRecord;
 import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.model.Project;
 import com.aimanga.v2.model.TaskEntity;
@@ -40,6 +41,8 @@ public class BatchTaskHandler implements TaskHandler {
     private final PageGenerationService pageGenerationService;
     private final PipelineStageService stageService;
     private final ConcurrentStageRunner stageRunner;
+    private final StageItemCommitService commitService;
+    private final GenerationRecordService generationRecordService;
 
     @Override
     public String type() {
@@ -109,11 +112,23 @@ public class BatchTaskHandler implements TaskHandler {
             stageService.markRunning(project.getId(), PipelineStageService.STAGE_LAYOUT);
             syncLayoutItems(project.getId(), pages, forceLayout);
             stageRunner.run(project.getId(), PipelineStageService.STAGE_LAYOUT, runtime,
-                    item -> {
+                    execution -> {
+                        PipelineStageItem item = execution.item();
                         PageEntity page = pageOf(item.getBusinessId());
-                        return "{\"pageId\":" + page.getId() + ",\"layout\":\""
-                                + layoutGenerationService.processPage(project, page, PipelineStageService.isForceRequested(item), task.getId())
-                                + "\"}";
+                        LayoutGenerationService.LayoutResult result = layoutGenerationService.processPage(
+                                project, page, PipelineStageService.isForceRequested(item));
+                        var commit = commitService.commitFenced(execution, () -> {
+                            layoutGenerationService.applyLayoutResult(page.getId(), page.getScriptVersion(), result);
+                            generationRecordService.record(project.getId(), page.getChapterId(), page.getId(), task.getId(),
+                                    GenerationRecord.KIND_LAYOUT, ctx.configService.getString("ai_image_model"),
+                                    result.prompt(), result.refUrls(), null, result.url(),
+                                    GenerationRecord.STATUS_SUCCESS, null);
+                            return "{\"pageId\":" + page.getId() + ",\"layout\":\"" + result.url() + "\"}";
+                        });
+                        if (!commit.committed()) {
+                            throw new StaleCommitRejectedException(item.getId());
+                        }
+                        return commit.resultRef();
                     }, stageRunner.imageEngine());
             if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_LAYOUT)) {
                 log.info("[batch] 作品 {} LAYOUT 暂停,等待继续", project.getId());
@@ -126,12 +141,24 @@ public class BatchTaskHandler implements TaskHandler {
         List<PageEntity> pagesAfterLayout = targetPages(project.getId(), chapterId, chapterIds);
         syncImageItems(project.getId(), pagesAfterLayout, skipGenerated, forceImage);
         stageRunner.run(project.getId(), PipelineStageService.STAGE_IMAGE, runtime,
-                item -> {
+                execution -> {
+                    PipelineStageItem item = execution.item();
                     PageEntity page = pageOf(item.getBusinessId());
-                    return "{\"pageId\":" + page.getId() + ",\"image\":\""
-                            + pageGenerationService.processPage(project, page, colorMode,
-                                    PipelineStageService.isForceRequested(item), task.getId())
-                            + "\"}";
+                    PageGenerationService.PageGenResult result = pageGenerationService.processPage(
+                            project, page, colorMode, PipelineStageService.isForceRequested(item));
+                    var commit = commitService.commitFenced(execution, () -> {
+                        String ref = pageGenerationService.applyPageImageResult(
+                                page.getId(), page.getScriptVersion(), result, page.getGenerateRecords());
+                        generationRecordService.record(project.getId(), page.getChapterId(), page.getId(), task.getId(),
+                                GenerationRecord.KIND_PAGE, ctx.configService.getString("ai_image_model"),
+                                result.prompt(), result.images(), result.inputUrl(), result.url(),
+                                GenerationRecord.STATUS_SUCCESS, null);
+                        return ref;
+                    });
+                    if (!commit.committed()) {
+                        throw new StaleCommitRejectedException(item.getId());
+                    }
+                    return commit.resultRef();
                 }, stageRunner.imageEngine());
         if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_IMAGE)) {
             log.info("[batch] 作品 {} IMAGE 暂停,等待继续", project.getId());

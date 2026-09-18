@@ -51,6 +51,7 @@ public class ScriptTaskHandler implements TaskHandler {
     private final PipelineStageService stageService;
     private final ConcurrentStageRunner stageRunner;
     private final PageAssetBindingService pageAssetBindingService;
+    private final StageItemCommitService commitService;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -85,10 +86,8 @@ public class ScriptTaskHandler implements TaskHandler {
         stageService.markRunning(project.getId(), PipelineStageService.STAGE_SCRIPT);
 
         // Phase 5.9 并发引擎 + T5.11.6:SCRIPT 使用独立脚本 Worker 池,不再占用生图池
-        stageRunner.run(project.getId(), PipelineStageService.STAGE_SCRIPT, runtime, item -> {
-            processOneChapter(project, item);
-            return "{\"chapterId\":" + item.getBusinessId() + "}";
-        }, stageRunner.scriptEngine());
+        stageRunner.run(project.getId(), PipelineStageService.STAGE_SCRIPT, runtime,
+                execution -> processOneChapter(project, execution), stageRunner.scriptEngine());
 
         // 暂停:阶段保持 PAUSED(pauseProject 已置),由恢复/继续重新入队
         if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_SCRIPT)) {
@@ -108,18 +107,19 @@ public class ScriptTaskHandler implements TaskHandler {
         }
     }
 
-    /** 处理单个章节 Item(生成脚本 + 写页 + upsert 角色) */
-    private void processOneChapter(Project project, PipelineStageItem item) {
+    /** 处理单个章节 Item(生成脚本 + fenced 提交:写页/角色/话状态/素材绑定 同事务,Phase 8.1) */
+    private String processOneChapter(Project project, StageItemExecution execution) {
+        PipelineStageItem item = execution.item();
         Long chapterId = item.getBusinessId();
         Chapter chapter = ctx.chapterMapper.selectById(chapterId);
         if (chapter == null) {
             throw new BusinessException(404, "话不存在: " + chapterId);
         }
 
-        // 幂等:已就绪则跳过
+        // 幂等:已就绪则跳过(fenced commit 会把 Item 标成功,不计 AI 调用)
         if (chapter.getStatus() != null && chapter.getStatus() >= Chapter.STATUS_SCRIPT_READY) {
             log.info("[script] 话 {} 已就绪,跳过", chapterId);
-            return;
+            return "{\"chapterId\":" + chapterId + ",\"skipped\":true}";
         }
 
         Project p = ctx.project(chapter.getProjectId());
@@ -150,25 +150,30 @@ public class ScriptTaskHandler implements TaskHandler {
                 "text", numbered));
         StoryScript script = executeWithRetry(prompt, unitCount, p.getId());
 
-        // 写页(重建该话全部页)并按页写入素材绑定(T6.1.3:AI assetIds 校验过滤 + Java 匹配补充)
-        List<PageEntity> writtenPages = writePages(p.getId(), chapter.getId(), script);
-        List<Asset> projectAssets = ctx.assetMapper.selectList(new LambdaQueryWrapper<Asset>()
-                .eq(Asset::getProjectId, p.getId()));
-        for (int i = 0; i < writtenPages.size() && i < script.pages().size(); i++) {
-            List<Long> aiIds = script.pages().get(i).assetIds();
-            pageAssetBindingService.bindPage(writtenPages.get(i), projectAssets, aiIds == null ? List.of() : aiIds);
+        // Phase 8.1 fenced commit:写页/角色 upsert/话状态/页素材绑定 同一短事务,
+        // 旧 Attempt(脚本版本已过期)的提交会被拒绝,不会覆盖最新章节内容
+        var commit = commitService.commitFenced(execution, () -> {
+            List<PageEntity> writtenPages = writePages(p.getId(), chapter.getId(), script);
+            List<Asset> projectAssets = ctx.assetMapper.selectList(new LambdaQueryWrapper<Asset>()
+                    .eq(Asset::getProjectId, p.getId()));
+            for (int i = 0; i < writtenPages.size() && i < script.pages().size(); i++) {
+                List<Long> aiIds = script.pages().get(i).assetIds();
+                pageAssetBindingService.bindPage(writtenPages.get(i), projectAssets, aiIds == null ? List.of() : aiIds);
+            }
+            upsertCharacters(p.getId(), script);
+
+            Chapter chapterPatch = new Chapter();
+            chapterPatch.setId(chapter.getId());
+            chapterPatch.setStatus(Chapter.STATUS_SCRIPT_READY);
+            chapterPatch.setPageCount(script.pages().size());
+            chapterPatch.setUpdateTime(LocalDateTime.now());
+            ctx.chapterMapper.updateById(chapterPatch);
+            return "{\"chapterId\":" + chapter.getId() + ",\"pages\":" + writtenPages.size() + "}";
+        });
+        if (!commit.committed()) {
+            throw new StaleCommitRejectedException(item.getId());
         }
-
-        // 角色 upsert
-        upsertCharacters(p.getId(), script);
-
-        // 话状态 → 脚本就绪
-        Chapter chapterPatch = new Chapter();
-        chapterPatch.setId(chapter.getId());
-        chapterPatch.setStatus(Chapter.STATUS_SCRIPT_READY);
-        chapterPatch.setPageCount(script.pages().size());
-        chapterPatch.setUpdateTime(LocalDateTime.now());
-        ctx.chapterMapper.updateById(chapterPatch);
+        return commit.resultRef();
     }
 
     /** 链式:SCRIPT 完成 → 推进「待出图」;仅 feature_auto_sheet=1 时自动生成设定表(默认关闭,素材由用户在资产库勾选生成) */

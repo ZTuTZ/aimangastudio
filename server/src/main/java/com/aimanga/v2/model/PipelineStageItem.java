@@ -39,6 +39,18 @@ public class PipelineStageItem {
 
     private String errorMessage;
 
+    /** 执行代次(Phase 8.1 fencing) */
+    private Integer attemptNo;
+
+    /** 当前执行 fencing token */
+    private String attemptToken;
+
+    /** 当前 attempt 领取时间 */
+    private LocalDateTime claimedAt;
+
+    /** 最后完成时间 */
+    private LocalDateTime finishTime;
+
     private LocalDateTime createTime;
 
     private LocalDateTime updateTime;

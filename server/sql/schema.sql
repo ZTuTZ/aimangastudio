@@ -180,11 +180,16 @@ CREATE TABLE IF NOT EXISTS `pipeline_stage_item` (
   `retry_count` INT NOT NULL DEFAULT 0,
   `result_ref` JSON COMMENT '结果引用(如 assetId/pageUrl)',
   `error_message` VARCHAR(512) DEFAULT '',
+  `attempt_no` INT NOT NULL DEFAULT 0 COMMENT '执行代次(Phase 8.1 fencing)',
+  `attempt_token` VARCHAR(64) NULL COMMENT '当前执行 fencing token',
+  `claimed_at` DATETIME NULL COMMENT '当前 attempt 领取时间',
+  `finish_time` DATETIME NULL COMMENT '最后完成时间',
   `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `update_time` DATETIME DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_item` (`project_id`, `stage_type`, `business_type`, `business_id`),
-  KEY `idx_item_status` (`project_id`, `stage_type`, `status`)
+  KEY `idx_item_status` (`project_id`, `stage_type`, `status`),
+  KEY `idx_item_attempt` (`id`, `attempt_token`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='流水线阶段执行单元';
 
 -- 页-资产素材绑定(Phase 6.1:每页明确引用哪些角色/场景/道具/服装,出图预检与一致性参考的依据)

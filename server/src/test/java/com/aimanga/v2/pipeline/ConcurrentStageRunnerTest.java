@@ -67,7 +67,11 @@ class ConcurrentStageRunnerTest {
 
         when(stageService.isStagePaused(eq(PROJECT_ID), eq(STAGE))).thenReturn(false);
         when(stageService.resetRunningItems(PROJECT_ID, STAGE)).thenReturn(0);
-        when(stageService.claimItem(anyLong())).thenReturn(true);
+        when(stageService.claimItem(anyLong(), anyString())).thenReturn(true);
+        // fenced 状态写默认成功(否则重试语义会变成 stale→重领 的无限循环)
+        when(stageService.markItemRetry(anyLong(), anyString(), anyString())).thenReturn(true);
+        when(stageService.markItemFailed(anyLong(), anyString(), anyString())).thenReturn(true);
+        when(stageService.markItemSuccess(anyLong(), anyString(), anyString())).thenReturn(true);
     }
 
     private PipelineStageItem item(long id, long businessId, int retryCount) {
@@ -122,9 +126,9 @@ class ConcurrentStageRunnerTest {
         }, runner.imageEngine());
 
         assertThat(attempts.get()).isEqualTo(2);
-        verify(stageService).markItemRetry(eq(1L), contains("模型未返回图片"));
-        verify(stageService).markItemSuccess(eq(1L), contains("assetId"));
-        verify(stageService, never()).markItemFailed(anyLong(), anyString());
+        verify(stageService).markItemRetry(eq(1L), anyString(), contains("模型未返回图片"));
+        verify(stageService).markItemSuccess(eq(1L), anyString(), contains("assetId"));
+        verify(stageService, never()).markItemFailed(anyLong(), anyString(), anyString());
         assertThat(result.success()).isEqualTo(1);
         assertThat(result.retried()).isEqualTo(1);
     }
@@ -143,8 +147,8 @@ class ConcurrentStageRunnerTest {
         }, runner.imageEngine());
 
         assertThat(attempts.get()).isEqualTo(2);
-        verify(stageService).markItemRetry(eq(1L), anyString());
-        verify(stageService).markItemFailed(eq(1L), contains("通道超时"));
+        verify(stageService).markItemRetry(eq(1L), anyString(), anyString());
+        verify(stageService).markItemFailed(eq(1L), anyString(), contains("通道超时"));
         verify(runtime).stepFail(anyString());
         assertThat(result.failed()).isEqualTo(1);
         assertThat(result.success()).isZero();
@@ -158,7 +162,7 @@ class ConcurrentStageRunnerTest {
 
         assertThat(result.paused()).isTrue();
         verify(stageService, never()).getPendingItemIds(anyLong(), anyString(), anyInt());
-        verify(stageService, never()).claimItem(anyLong());
+        verify(stageService, never()).claimItem(anyLong(), anyString());
     }
 
     @Test
@@ -167,7 +171,7 @@ class ConcurrentStageRunnerTest {
 
         assertThatThrownBy(() -> runner.run(PROJECT_ID, STAGE, runtime, it -> "{}", runner.imageEngine()))
                 .isInstanceOf(TaskStopSignal.class);
-        verify(stageService, never()).claimItem(anyLong());
+        verify(stageService, never()).claimItem(anyLong(), anyString());
     }
 
     @Test
@@ -192,8 +196,8 @@ class ConcurrentStageRunnerTest {
         assertThatThrownBy(() -> runner.run(PROJECT_ID, STAGE, runtime, it -> "{}", runner.imageEngine()))
                 .isInstanceOf(TaskStopSignal.class);
 
-        verify(stageService, atLeastOnce()).releaseItem(1L);
-        verify(stageService, never()).markItemSuccess(anyLong(), anyString());
+        verify(stageService, atLeastOnce()).releaseItem(org.mockito.ArgumentMatchers.eq(1L), anyString());
+        verify(stageService, never()).markItemSuccess(anyLong(), anyString(), anyString());
     }
 
     @Test
@@ -211,6 +215,6 @@ class ConcurrentStageRunnerTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("已有生成任务在执行中");
         verify(stageService, never()).resetRunningItems(anyLong(), anyString());
-        verify(stageService, never()).claimItem(anyLong());
+        verify(stageService, never()).claimItem(anyLong(), anyString());
     }
 }

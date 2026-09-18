@@ -38,6 +38,7 @@ public class SheetTaskHandler implements TaskHandler {
     private final AiService aiService;
     private final ConcurrentStageRunner stageRunner;
     private final PipelineStageService stageService;
+    private final StageItemCommitService commitService;
 
     @Override
     public String type() {
@@ -72,7 +73,7 @@ public class SheetTaskHandler implements TaskHandler {
         runtime.begin((int) before.pending());
 
         stageRunner.run(project.getId(), PipelineStageService.STAGE_SHEET, runtime,
-                item -> generateSheet(project, item), stageRunner.imageEngine());
+                execution -> generateSheet(project, execution), stageRunner.imageEngine());
 
         // 暂停:阶段保持 PAUSED(pauseProject 已置),由恢复/继续重新入队
         if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_SHEET)) {
@@ -92,15 +93,16 @@ public class SheetTaskHandler implements TaskHandler {
         }
     }
 
-    /** 单个 Item 处理器:角色设定表生成(§9 幂等:先存 OSS → 更新资产 URL → 才标 Item 成功) */
-    private String generateSheet(Project project, PipelineStageItem item) {
+    /** 单个 Item 处理器:角色设定表生成(§9 幂等 + Phase 8.1 fenced commit) */
+    private String generateSheet(Project project, StageItemExecution execution) {
+        PipelineStageItem item = execution.item();
+        boolean forceRegen = PipelineStageService.isForceRequested(item);
         Asset asset = ctx.assetMapper.selectById(item.getBusinessId());
         if (asset == null) {
             throw new BusinessException(404, "资产不存在: " + item.getBusinessId());
         }
         // 幂等(全量跑):上次进程在"保存 URL 之后、标成功之前"崩溃 → 已有图直接补标成功,不重复生图。
-        // 用户手动重生成(forceReset 写入的 force 标记)不受此限制,必须重画。
-        boolean forceRegen = PipelineStageService.isForceRequested(item);
+        // 用户手动重生成(force 标记)不受此限制,必须重画。
         if (!forceRegen && asset.getSheetImageUrl() != null && !asset.getSheetImageUrl().isBlank()) {
             return resultRef(asset.getId(), asset.getSheetImageUrl());
         }
@@ -118,13 +120,20 @@ public class SheetTaskHandler implements TaskHandler {
             List<String> refs = asset.getReferenceUrl() == null || asset.getReferenceUrl().isBlank()
                     ? List.of() : List.of(asset.getReferenceUrl());
             String url = aiService.generateImage("image", prompt, refs, "3:4", project.getUserId());
-            Asset patch = new Asset();
-            patch.setId(asset.getId());
-            patch.setSheetImageUrl(url);
-            patch.setGenStatus(Asset.GEN_IDLE);
-            patch.setUpdateTime(LocalDateTime.now());
-            ctx.assetMapper.updateById(patch);
-            return resultRef(asset.getId(), url);
+            // Phase 8.1 fenced commit:资产写入 + Item SUCCESS 同事务,旧 Attempt 提交会被拒绝
+            var commit = commitService.commitFenced(execution, () -> {
+                Asset patch = new Asset();
+                patch.setId(asset.getId());
+                patch.setSheetImageUrl(url);
+                patch.setGenStatus(Asset.GEN_IDLE);
+                patch.setUpdateTime(LocalDateTime.now());
+                ctx.assetMapper.updateById(patch);
+                return resultRef(asset.getId(), url);
+            });
+            if (!commit.committed()) {
+                throw new StaleCommitRejectedException(item.getId());
+            }
+            return commit.resultRef();
         } catch (Exception e) {
             Asset patch = new Asset();
             patch.setId(asset.getId());

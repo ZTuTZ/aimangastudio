@@ -193,37 +193,35 @@ public class PipelineStageService {
     // ---- Stage Item 并发领取与重试(Phase 5.9) ----
 
     /**
-     * Item 原子领取:PENDING → RUNNING(数据库原子 UPDATE,影响行数=1 才算领取成功)。
+     * Item 原子领取(Phase 8.1 Attempt Fencing):PENDING → RUNNING 并写入 attempt 代次与 token。
      * 多个 Worker 同时领取同一 Item 时只有一个成功,保证同一页/同一角色不被重复生成。
      */
-    public boolean claimItem(Long itemId) {
-        return itemMapper.claim(itemId) == 1;
+    public boolean claimItem(Long itemId, String attemptToken) {
+        return itemMapper.claim(itemId, attemptToken) == 1;
     }
 
-    /** 释放领取(用户停止/暂停时把在跑 Item 归还为 PENDING,下次继续) */
-    public void releaseItem(Long itemId) {
-        itemMapper.release(itemId);
+    /** Fenced 释放(用户停止/暂停时把在跑 Item 归还;token 失效=0 行,由调用方忽略) */
+    public void releaseItem(Long itemId, String attemptToken) {
+        itemMapper.release(itemId, attemptToken);
     }
 
     public PipelineStageItem getItem(Long itemId) {
         return itemMapper.selectById(itemId);
     }
 
-    /** Item 失败重试:FAILED 前先回到 PENDING 并累计 retry_count(由 Runner 判断是否超过 max_retry) */
-    public void markItemRetry(Long itemId, String error) {
-        itemMapper.update(null, new LambdaUpdateWrapper<PipelineStageItem>()
-                .eq(PipelineStageItem::getId, itemId)
-                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING)
-                .set(PipelineStageItem::getErrorMessage, error == null ? "" : error.substring(0, Math.min(error.length(), 512)))
-                .setSql("retry_count = retry_count + 1"));
+    /** Item 失败重试(Phase 8.1 fenced):回到 PENDING 并累计 retry_count;token 失效返回 false */
+    public boolean markItemRetry(Long itemId, String attemptToken, String error) {
+        return itemMapper.markRetry(itemId, attemptToken, error) == 1;
     }
 
-    /** 标记 Item 成功(带结果引用 JSON) */
-    public void markItemSuccess(Long itemId, String resultRef) {
-        itemMapper.update(null, new LambdaUpdateWrapper<PipelineStageItem>()
-                .eq(PipelineStageItem::getId, itemId)
-                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_SUCCESS)
-                .set(PipelineStageItem::getResultRef, resultRef));
+    /** Fenced 成功(Phase 8.1):仅当前 token 持有者可标成功;0 行=已被其他 Attempt 提交,忽略 */
+    public boolean markItemSuccess(Long itemId, String attemptToken, String resultRef) {
+        return itemMapper.markSuccess(itemId, attemptToken, resultRef) == 1;
+    }
+
+    /** Fenced 失败(Phase 8.1):仅当前 token 持有者可标失败;0 行=已被其他 Attempt 接管 */
+    public boolean markItemFailed(Long itemId, String attemptToken, String error) {
+        return itemMapper.markFailed(itemId, attemptToken, error) == 1;
     }
 
     /** 回收孤儿 RUNNING Items(进程崩溃/被杀残留)。任务层 claim_token+看门狗保证同一阶段同时只有一个 Runner,启动时重置安全。 */
@@ -232,7 +230,9 @@ public class PipelineStageService {
                 .eq(PipelineStageItem::getProjectId, projectId)
                 .eq(PipelineStageItem::getStageType, stageType)
                 .eq(PipelineStageItem::getStatus, PipelineStageItem.STATUS_RUNNING)
-                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING));
+                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING)
+                .set(PipelineStageItem::getAttemptToken, null)
+                .set(PipelineStageItem::getClaimedAt, null));
     }
 
     /** 重跑支持:把终态 FAILED 的 Items 重新排队(重跑 SHEET/SCRIPT 任务时自动重试失败单元) */
@@ -241,7 +241,9 @@ public class PipelineStageService {
                 .eq(PipelineStageItem::getProjectId, projectId)
                 .eq(PipelineStageItem::getStageType, stageType)
                 .eq(PipelineStageItem::getStatus, PipelineStageItem.STATUS_FAILED)
-                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING));
+                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING)
+                .set(PipelineStageItem::getAttemptToken, null)
+                .set(PipelineStageItem::getClaimedAt, null));
     }
 
     /** 精准重置:手动重生成指定业务单元时,把对应 Item 重置为排队(不影响其他失败单元) */
@@ -255,7 +257,9 @@ public class PipelineStageService {
                 .eq(PipelineStageItem::getBusinessType, businessType)
                 .in(PipelineStageItem::getBusinessId, businessIds)
                 .in(PipelineStageItem::getStatus, PipelineStageItem.STATUS_RUNNING, PipelineStageItem.STATUS_FAILED)
-                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING));
+                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING)
+                .set(PipelineStageItem::getAttemptToken, null)
+                .set(PipelineStageItem::getClaimedAt, null));
     }
 
     /**
@@ -277,7 +281,9 @@ public class PipelineStageService {
                 .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING)
                 .set(PipelineStageItem::getRetryCount, 0)
                 .set(PipelineStageItem::getResultRef, "{\"force\":true}")
-                .set(PipelineStageItem::getErrorMessage, ""));
+                .set(PipelineStageItem::getErrorMessage, "")
+                .set(PipelineStageItem::getAttemptToken, null)
+                .set(PipelineStageItem::getClaimedAt, null));
     }
 
     /** 判断 Item 是否被用户强制要求重生成(forceResetItemsByBusiness 写入的标记) */
@@ -346,20 +352,6 @@ public class PipelineStageService {
     }
 
     /** 标记 Item 成功 */
-    public void markItemSuccess(Long itemId) {
-        itemMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<PipelineStageItem>()
-                .eq(PipelineStageItem::getId, itemId)
-                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_SUCCESS));
-    }
-
-    /** 标记 Item 失败 */
-    public void markItemFailed(Long itemId, String error) {
-        itemMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<PipelineStageItem>()
-                .eq(PipelineStageItem::getId, itemId)
-                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_FAILED)
-                .set(PipelineStageItem::getErrorMessage, error == null ? "" : error.substring(0, Math.min(error.length(), 512))));
-    }
-
     /** 判断阶段全部 Item 是否都成功 */
     public boolean allItemsSuccess(Long projectId, String stageType) {
         Long pending = itemMapper.selectCount(new LambdaQueryWrapper<PipelineStageItem>()

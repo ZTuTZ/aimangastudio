@@ -2,6 +2,7 @@ package com.aimanga.v2.pipeline;
 
 import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.PageEntity;
+import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.model.Project;
 import com.aimanga.v2.model.TaskEntity;
 import com.aimanga.v2.task.TaskHandler;
@@ -20,13 +21,16 @@ public abstract class PostProcessTaskHandler implements TaskHandler {
     protected final PostProcessService postProcessService;
     protected final PipelineStageService stageService;
     protected final ConcurrentStageRunner stageRunner;
+    protected final StageItemCommitService commitService;
 
     protected PostProcessTaskHandler(PipelineContext ctx, PostProcessService postProcessService,
-                                     PipelineStageService stageService, ConcurrentStageRunner stageRunner) {
+                                     PipelineStageService stageService, ConcurrentStageRunner stageRunner,
+                                     StageItemCommitService commitService) {
         this.ctx = ctx;
         this.postProcessService = postProcessService;
         this.stageService = stageService;
         this.stageRunner = stageRunner;
+        this.commitService = commitService;
     }
 
     /** 后处理类型:COLORIZE/CLEAN/REPAINT(同时是 Stage 类型) */
@@ -49,16 +53,23 @@ public abstract class PostProcessTaskHandler implements TaskHandler {
         runtime.begin((int) Math.max(1, before.pending()));
 
         stageRunner.run(project.getId(), stageType, runtime,
-                item -> {
+                execution -> {
+                    PipelineStageItem item = execution.item();
                     PageEntity page = ctx.pageMapper.selectById(item.getBusinessId());
                     if (page == null) {
                         throw new BusinessException(404, "页面不存在: " + item.getBusinessId());
                     }
-                    String url = postProcessService.process(project, page, op(),
-                            parseString(task.getPayload(), "repaintPrompt"),
+                    String repaintPrompt = parseString(task.getPayload(), "repaintPrompt");
+                    PostProcessService.PostProcessResult result = postProcessService.execute(
+                            project, page, op(), repaintPrompt,
                             parseString(task.getPayload(), "maskUrl"),
-                            parseString(task.getPayload(), "colorMode"), task.getId());
-                    return "{\"pageId\":" + page.getId() + ",\"url\":\"" + url + "\"}";
+                            parseString(task.getPayload(), "colorMode"));
+                    var commit = commitService.commitFenced(execution,
+                            () -> postProcessService.applyResult(project, page, result, repaintPrompt));
+                    if (!commit.committed()) {
+                        throw new StaleCommitRejectedException(item.getId());
+                    }
+                    return commit.resultRef();
                 }, stageRunner.imageEngine());
 
         if (stageService.isStagePaused(project.getId(), stageType)) {

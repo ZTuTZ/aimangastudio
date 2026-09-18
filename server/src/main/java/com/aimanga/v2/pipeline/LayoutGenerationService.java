@@ -5,23 +5,21 @@ import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.PageEntity;
 import com.aimanga.v2.model.Project;
 import com.aimanga.v2.repository.PageMapper;
-import com.aimanga.v2.model.GenerationRecord;
-import com.aimanga.v2.service.ConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
+import java.util.List;
 
 /**
- * 布局图生成服务(Phase 6.2 T6.2.3):
- * Page + Prompt + ReferenceResolver → AI image → OSS → page.layout_image_url。
+ * 布局图生成服务(Phase 6.2 T6.2.3 + Phase 8.1):
+ * Page + Prompt + ReferenceResolver → AI image → OSS。
  *
- * 布局图只解决构图约束(分格/站位/景别/阅读顺序),不做最终脸部/文字/材质;
- * 真正成品页由 PageGenerationService(Phase 6.3)以布局图为第 1 参考图生成。
+ * Phase 8.1 fencing:本服务只负责 幂等检查 + AI + OSS(返回 LayoutResult),
+ * 业务表写入(page.layout_image_url / generation_record)由调用方通过
+ * StageItemCommitService.commitFenced 在短事务内提交 —— 旧 Attempt 的业务写入会被拒绝。
  *
- * 幂等(T6.2.5):layout_image_url 非空且非强制 → 直接返回现有图,不重复调用 AI;
- * 手动重布局通过 forceReset 对应 LAYOUT Item(force 标记)实现。
+ * 布局图只解决构图约束(分格/站位/景别/阅读顺序),不做最终脸部/文字/材质。
  */
 @Slf4j
 @Service
@@ -32,35 +30,37 @@ public class LayoutGenerationService {
     private final PageReferenceResolver referenceResolver;
     private final PagePromptCompiler promptCompiler;
     private final AiService aiService;
-    private final GenerationRecordService generationRecordService;
-    private final ConfigService configService;
 
-    /** 处理单页布局:返回布局图 URL;force=用户强制重布局时跳过幂等检查。
+    /** AI+OSS 结果(业务写入由 fenced commit 完成) */
+    public record LayoutResult(String url, String prompt, List<String> refUrls) {}
+
+    /** 处理单页布局:返回 AI/OSS 结果;force=用户强制重布局时跳过幂等检查。
      *  T6.5.4:已有布局图但脚本版本已更新(layoutScriptVersion < scriptVersion)视为过期,自动重画。 */
-    public String processPage(Project project, PageEntity page, boolean force, Long taskId) {
+    public LayoutResult processPage(Project project, PageEntity page, boolean force) {
         boolean fresh = page.getLayoutImageUrl() != null && !page.getLayoutImageUrl().isBlank()
                 && page.getLayoutScriptVersion() != null
                 && page.getLayoutScriptVersion().equals(orOne(page.getScriptVersion()));
         if (!force && fresh) {
-            return page.getLayoutImageUrl();
+            return new LayoutResult(page.getLayoutImageUrl(), "", List.of());
         }
         PageReferenceResolver.ResolvedReferences refs =
                 referenceResolver.resolve(project.getId(), page.getId(), project);
         String prompt = promptCompiler.compileLayoutPrompt(project, page, refs.assetLabels());
-        // OSS 转存已在 AiService 内完成(§9:先保存 OSS → 更新业务字段 → 由 Runner 标 Item SUCCESS)
+        // OSS 转存已在 AiService 内完成;业务表写入由 fenced commit 完成(Phase 8.1)
         String url = aiService.generateImage("image", prompt, refs.imageUrls(),
                 project.getAspectRatio(), project.getUserId());
+        log.info("[layout] 作品 {} 页#{} 布局图已生成(AI+OSS): {}", project.getId(), page.getPageNo(), url);
+        return new LayoutResult(url, prompt, refs.imageUrls());
+    }
+
+    /** 布局业务写入(fenced commit 事务内调用) */
+    public void applyLayoutResult(Long pageId, Integer scriptVersion, LayoutResult result) {
         PageEntity patch = new PageEntity();
-        patch.setId(page.getId());
-        patch.setLayoutImageUrl(url);
-        patch.setLayoutScriptVersion(orOne(page.getScriptVersion()));
-        patch.setUpdateTime(LocalDateTime.now());
+        patch.setId(pageId);
+        patch.setLayoutImageUrl(result.url());
+        patch.setLayoutScriptVersion(orOne(scriptVersion));
+        patch.setUpdateTime(java.time.LocalDateTime.now());
         pageMapper.updateById(patch);
-        generationRecordService.record(project.getId(), page.getChapterId(), page.getId(), taskId,
-                GenerationRecord.KIND_LAYOUT, configService.getString("ai_image_model"), prompt,
-                refs.imageUrls(), null, url, GenerationRecord.STATUS_SUCCESS, null);
-        log.info("[layout] 作品 {} 页#{} 布局图已生成: {}", project.getId(), page.getPageNo(), url);
-        return url;
     }
 
     private static int orOne(Integer version) {

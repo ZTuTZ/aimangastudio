@@ -2,6 +2,7 @@ package com.aimanga.v2.pipeline;
 
 import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.PageEntity;
+import com.aimanga.v2.model.GenerationRecord;
 import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.model.Project;
 import com.aimanga.v2.model.TaskEntity;
@@ -34,6 +35,8 @@ public class LayoutTaskHandler implements TaskHandler {
     private final LayoutGenerationService layoutGenerationService;
     private final PipelineStageService stageService;
     private final ConcurrentStageRunner stageRunner;
+    private final StageItemCommitService commitService;
+    private final GenerationRecordService generationRecordService;
 
     @Override
     public String type() {
@@ -64,7 +67,7 @@ public class LayoutTaskHandler implements TaskHandler {
         runtime.begin((int) before.pending());
 
         stageRunner.run(project.getId(), PipelineStageService.STAGE_LAYOUT, runtime,
-                item -> processOnePage(project, item, task.getId()), stageRunner.imageEngine());
+                execution -> processOnePage(project, execution, task.getId()), stageRunner.imageEngine());
 
         if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_LAYOUT)) {
             log.info("[layout] 作品 {} LAYOUT 暂停中,等待继续", project.getId());
@@ -82,12 +85,23 @@ public class LayoutTaskHandler implements TaskHandler {
         }
     }
 
-    /** 单页处理(Item → 布局图);force 标记由 forceResetItemsByBusiness 写入 */
-    private String processOnePage(Project project, PipelineStageItem item, Long taskId) {
-        PageEntity page = layoutGenerationService.page(item.getBusinessId());
-        boolean force = PipelineStageService.isForceRequested(item);
-        String url = layoutGenerationService.processPage(project, page, force, taskId);
-        return "{\"pageId\":" + page.getId() + ",\"layoutImageUrl\":\"" + url + "\"}";
+    /** 单页处理(Item → AI+OSS → fenced commit 写布局图,Phase 8.1) */
+    private String processOnePage(Project project, StageItemExecution execution, Long taskId) {
+        PageEntity page = layoutGenerationService.page(execution.item().getBusinessId());
+        boolean force = PipelineStageService.isForceRequested(execution.item());
+        LayoutGenerationService.LayoutResult result = layoutGenerationService.processPage(project, page, force);
+        var commit = commitService.commitFenced(execution, () -> {
+            layoutGenerationService.applyLayoutResult(page.getId(), page.getScriptVersion(), result);
+            generationRecordService.record(project.getId(), page.getChapterId(), page.getId(), taskId,
+                    GenerationRecord.KIND_LAYOUT, ctx.configService.getString("ai_image_model"),
+                    result.prompt(), result.refUrls(), null, result.url(),
+                    GenerationRecord.STATUS_SUCCESS, null);
+            return "{\"pageId\":" + page.getId() + ",\"layoutImageUrl\":\"" + result.url() + "\"}";
+        });
+        if (!commit.committed()) {
+            throw new StaleCommitRejectedException(execution.item().getId());
+        }
+        return commit.resultRef();
     }
 
     /** 同步 LAYOUT Items:按目标页建缺的 Item、清理孤儿 Item、失败重排 */

@@ -20,12 +20,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 成品页生成服务(Phase 6.3 T6.3.1):
- * 页脚本 + 布局图 + PageReferenceResolver 素材 + 风格 + 色彩 + 画幅 → AI → OSS → page.generated_image_url。
+ * 成品页生成服务(Phase 6.3 T6.3.1 + Phase 8.1 fencing):
+ * 页脚本 + 布局图 + 素材参考 + 风格 + 色彩 + 画幅 → AI → OSS,返回 PageGenResult。
  *
- * 最终参考图顺序(T6.3.2):布局图(构图约束)置顶 → 角色设定表/参考图 → 场景 → 服装 → 道具 → 风格图(身份/环境约束)。
- * 写入顺序(T6.3.1 铁律):AI 返回 → OSS 保存 → 写 generated_image_url → 追加 generate_records → 由 Runner 标 Item SUCCESS。
- * 页与页之间零依赖(T6.3.3):跨页一致性由资产设定表/参考图/风格保证,前一页结果只作低优先级可选参考。
+ * Phase 8.1:本服务只负责 幂等检查 + AI + OSS + GEN_RUNNING/GEN_FAILED 状态标记;
+ * 正式业务写入(generated_image_url / generate_records / image_script_version)
+ * 由调用方通过 StageItemCommitService.commitFenced 在短事务内完成 —— 旧 Attempt 会被拒绝。
+ *
+ * 最终参考图顺序(T6.3.2):布局图置顶(构图约束) → 素材图(身份/环境约束)。
+ * 页与页之间零依赖(T6.3.3)。
  */
 @Slf4j
 @Service
@@ -38,18 +41,23 @@ public class PageGenerationService {
     private final PageReferenceResolver referenceResolver;
     private final PagePromptCompiler promptCompiler;
     private final AiService aiService;
-    private final GenerationRecordService generationRecordService;
     private final ConfigService configService;
     private final ObjectMapper objectMapper;
 
-    /** 处理单页成品:返回成品图 URL;force=用户强制重生成时跳过幂等。
+    /** AI+OSS 结果(业务写入由 fenced commit 完成) */
+    public record PageGenResult(String url, String mode, String prompt, List<String> images,
+                                String inputUrl, Long chapterId, Integer pageNo) {}
+
+    /** 处理单页成品:幂等检查 + AI + OSS;force=用户强制重生成时跳过幂等。
      *  T6.5.4:已有成品图但脚本版本更新(imageScriptVersion < scriptVersion)视为过期,不删旧图,直接重画。 */
-    public String processPage(Project project, PageEntity page, String colorMode, boolean force, Long taskId) {
+    public PageGenResult processPage(Project project, PageEntity page, String colorMode, boolean force) {
         boolean fresh = page.getGeneratedImageUrl() != null && !page.getGeneratedImageUrl().isBlank()
                 && page.getImageScriptVersion() != null
                 && page.getImageScriptVersion().equals(orOne(page.getScriptVersion()));
         if (!force && fresh) {
-            return page.getGeneratedImageUrl();
+            return new PageGenResult(page.getGeneratedImageUrl(),
+                    colorMode == null || colorMode.isBlank() ? project.getColorMode() : colorMode,
+                    "", List.of(), null, page.getChapterId(), page.getPageNo());
         }
         // page_direct_output=1:直接出成品,不依赖布局图(T6.4 配置开关)
         boolean directOutput = configService.getInt("page_direct_output", 0) == 1;
@@ -71,18 +79,25 @@ public class PageGenerationService {
         String mode = colorMode == null || colorMode.isBlank()
                 ? (project.getColorMode() == null ? "partial" : project.getColorMode()) : colorMode;
         try {
-            // §9:先 OSS 转存 → 写业务字段 → 追加 generate_records → Runner 标 Item SUCCESS
+            // §9 前半:OSS 转存完成;业务字段写入移交 fenced commit(Phase 8.1)
             String url = aiService.generateImage("image", prompt, images, project.getAspectRatio(), project.getUserId());
-            markPageStatus(page.getId(), PageEntity.GEN_SUCCESS, url, mode, null,
-                    appendRecord(page.getGenerateRecords(), url, mode), orOne(page.getScriptVersion()));
-            log.info("[page-gen] 作品 {} 话{} 页#{} 成品页已生成: {}", project.getId(), page.getChapterId(), page.getPageNo(), url);
-            return url;
+            log.info("[page-gen] 作品 {} 话{} 页#{} 成品页 AI+OSS 完成: {}",
+                    project.getId(), page.getChapterId(), page.getPageNo(), url);
+            return new PageGenResult(url, mode, prompt, images,
+                    directOutput ? null : page.getLayoutImageUrl(), page.getChapterId(), page.getPageNo());
         } catch (RuntimeException e) {
             String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             markPageStatus(page.getId(), PageEntity.GEN_FAILED, null, null,
                     reason, appendRecord(page.getGenerateRecords(), "", mode), null);
             throw e;
         }
+    }
+
+    /** 成功业务写入(fenced commit 事务内调用):generated_image_url + records + image_script_version */
+    public String applyPageImageResult(Long pageId, Integer scriptVersion, PageGenResult result, String recordsJson) {
+        markPageStatus(pageId, PageEntity.GEN_SUCCESS, result.url(), result.mode(), null,
+                appendRecord(recordsJson, result.url(), result.mode()), orOne(scriptVersion));
+        return "{\"pageId\":" + pageId + ",\"image\":\"" + result.url() + "\"}";
     }
 
     private static int orOne(Integer version) {
@@ -104,8 +119,7 @@ public class PageGenerationService {
     }
 
     /**
-     * 生成记录追加(独立静态方法便于测试):失败时也保留最近一次失败的 URL 信息由调用方决定。
-     * 格式:JSON 数组,每项 {time,url,colorMode}。
+     * 生成记录追加(独立静态方法便于测试):JSON 数组,每项 {time,url,colorMode},保留最近 20 条。
      */
     public static String appendRecord(String recordsJson, String url, String colorMode) {
         try {
@@ -118,7 +132,6 @@ public class PageGenerationService {
             record.put("url", url);
             record.put("colorMode", colorMode);
             array.add(record);
-            // 只保留最近 20 条,避免长期生产把行撑爆
             while (array.size() > 20) {
                 array.remove(0);
             }
