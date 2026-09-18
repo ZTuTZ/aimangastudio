@@ -96,23 +96,25 @@ public class RemoteImageFetcher {
         if (host == null || host.isBlank()) {
             throw new BusinessException(502, "图片地址缺少 host: " + uri);
         }
-        // CDN/OSS 白名单(config 化,逗号分隔)
+        // CDN/OSS 白名单只限制域名集合，不豁免 DNS 解析后的内网地址校验。
         String allowList = configService.getString("remote_image_allow_hosts");
         if (allowList != null && !allowList.isBlank()) {
-            for (String allowed : allowList.split(",")) {
-                if (host.equals(allowed.trim()) || host.endsWith("." + allowed.trim())) {
-                    return;
+            boolean allowed = false;
+            for (String candidate : allowList.split(",")) {
+                if (host.equals(candidate.trim()) || host.endsWith("." + candidate.trim())) {
+                    allowed = true;
+                    break;
                 }
             }
-            // 白名单配置非空时,host 必须命中
-            throw new BusinessException(502, "图片 host 不在白名单: " + host);
+            if (!allowed) {
+                throw new BusinessException(502, "图片 host 不在白名单: " + host);
+            }
         }
         // DNS 解析后校验 IP(禁 localhost/loopback/link-local/私网)
         try {
             InetAddress[] addresses = InetAddress.getAllByName(host);
             for (InetAddress addr : addresses) {
-                if (addr.isLoopbackAddress() || addr.isLinkLocalAddress()
-                        || addr.isSiteLocalAddress() || addr.isAnyLocalAddress()) {
+                if (isBlockedAddress(addr)) {
                     throw new BusinessException(502, "禁止访问内网图片地址: " + host);
                 }
             }
@@ -127,6 +129,16 @@ public class RemoteImageFetcher {
         } catch (IOException e) {
             throw new BusinessException(502, "打开图片连接失败: " + uri + " (" + e.getMessage() + ")");
         }
+    }
+
+    static boolean isBlockedAddress(InetAddress address) {
+        if (address.isLoopbackAddress() || address.isLinkLocalAddress()
+                || address.isSiteLocalAddress() || address.isAnyLocalAddress()) {
+            return true;
+        }
+        byte[] bytes = address.getAddress();
+        // IPv6 unique-local FC00::/7，相当于 IPv4 RFC1918 私网。
+        return bytes.length == 16 && (bytes[0] & 0xFE) == 0xFC;
     }
 
     /** 拉取结果:流式 InputStream + MIME(实现 AutoCloseable 供 try-with-resources) */

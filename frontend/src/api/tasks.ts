@@ -7,7 +7,7 @@ export interface TaskVO {
   projectId: number | null;
   chapterId: number | null;
   taskType: string;
-  status: number; // 0排队 1进行中 2成功 3失败 4部分失败 5已停止 6停止中
+  status: number; // 0排队 1进行中 2成功 3失败 4部分失败 5已停止 6停止中 7已暂停
   priority: number;
   progress: number;
   totalCount: number;
@@ -46,6 +46,7 @@ export const TASK_STATUS: Record<number, { label: string; color: string }> = {
   4: { label: '部分失败', color: 'warning' },
   5: { label: '已停止', color: 'default' },
   6: { label: '停止中', color: 'processing' },
+  7: { label: '已暂停', color: 'warning' },
 };
 
 export const tasksApi = {
@@ -56,5 +57,6 @@ export const tasksApi = {
     unwrap<TaskVO>(http.post('/tasks', data)),
   stop: (id: number) => unwrap<TaskVO>(http.post(`/tasks/${id}/stop`)),
   retry: (id: number) => unwrap<TaskVO>(http.post(`/tasks/${id}/retry`)),
+  resume: (id: number) => unwrap<TaskVO>(http.post(`/tasks/${id}/resume`)),
   remove: (id: number) => unwrap<void>(http.delete(`/tasks/${id}`)),
 };

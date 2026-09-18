@@ -59,7 +59,7 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets, 
     queryFn: () => projectsApi.generationPreflight(projectId, preflightOpts),
   });
 
-  // 活跃 BATCH 任务(0排队/1进行中/6停止中)
+  // 当前 BATCH 任务(0排队/1进行中/6停止中/7已暂停均占用同一任务槽)
   const { data: batchPage } = useQuery({
     queryKey: ['tasks', projectId, 'batch'],
     queryFn: () => tasksApi.list({ page: 1, size: 1, projectId, type: 'BATCH' }),
@@ -68,6 +68,8 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets, 
   });
   const batchTask = batchPage?.records?.[0];
   const batchActive = !!batchTask && [0, 1, 6].includes(batchTask.status);
+  const batchPaused = batchTask?.status === 7;
+  const batchOccupied = batchActive || batchPaused;
 
   // Stage 实时进度(BATCH 活跃时 3s 轮询;SSE 事件也会触发失效)
   const { data: stages } = useQuery({
@@ -109,7 +111,7 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets, 
     onError: (e) => message.error(e instanceof Error ? e.message : '操作失败'),
   });
 
-  const canStart = !!preflight?.ready && !batchActive && !!preflight?.pageCount
+  const canStart = !!preflight?.ready && !batchOccupied && !!preflight?.pageCount
     && (scope !== 'CHAPTERS' || selectedChapterIds.length > 0);
   const required = preflight?.stats?.find((s) => s.assetType === 1);
 
@@ -233,14 +235,14 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets, 
           loading={start.isPending}
           onClick={() => start.mutate()}
         >
-          {batchActive ? '生成任务进行中…' : '开始生成成品页'}
+          {batchActive ? '生成任务进行中…' : batchPaused ? '生成任务已暂停' : '开始生成成品页'}
         </Button>
         {batchActive && (
           <Button icon={<PauseCircleOutlined />} onClick={() => pauseOrResume.mutate('pause')}>暂停</Button>
         )}
         <Button
           icon={<PlayCircleOutlined />}
-          disabled={batchActive}
+          disabled={!batchPaused}
           onClick={() => pauseOrResume.mutate('resume')}
         >
           继续流水线

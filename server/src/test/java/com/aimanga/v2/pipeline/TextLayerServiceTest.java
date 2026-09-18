@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -25,6 +26,18 @@ import static org.mockito.Mockito.when;
  * 初始化规则布局 / 保存按 uid 增删改 / 脚本同步保留位置 / 重置。
  */
 class TextLayerServiceTest {
+
+    @Test
+    void multiRowMutationsAreTransactional() throws Exception {
+        assertThat(TextLayerService.class.getMethod("initializeFromPage", Long.class)
+                .isAnnotationPresent(Transactional.class)).isTrue();
+        assertThat(TextLayerService.class.getMethod("saveTextLayer", Long.class, TextLayerDto.class)
+                .isAnnotationPresent(Transactional.class)).isTrue();
+        assertThat(TextLayerService.class.getMethod("resetTextLayer", Long.class)
+                .isAnnotationPresent(Transactional.class)).isTrue();
+        assertThat(TextLayerService.class.getMethod("syncFromPageContent", Long.class)
+                .isAnnotationPresent(Transactional.class)).isTrue();
+    }
 
     private PageMapper pageMapper;
     private PageTextElementMapper elementMapper;

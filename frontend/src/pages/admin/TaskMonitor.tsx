@@ -48,10 +48,10 @@ export function TaskMonitor() {
   });
 
   const act = useMutation({
-    mutationFn: ({ id, action }: { id: number; action: 'stop' | 'retry' }) =>
-      action === 'stop' ? tasksApi.stop(id) : tasksApi.retry(id),
+    mutationFn: ({ id, action }: { id: number; action: 'stop' | 'retry' | 'resume' }) =>
+      action === 'stop' ? tasksApi.stop(id) : action === 'resume' ? tasksApi.resume(id) : tasksApi.retry(id),
     onSuccess: (_d, v) => {
-      message.success(v.action === 'stop' ? '已停止' : '已重新入队');
+      message.success(v.action === 'stop' ? '已停止' : v.action === 'resume' ? '已恢复' : '已重新入队');
       queryClient.invalidateQueries({ queryKey: ['monitor-tasks'] });
       queryClient.invalidateQueries({ queryKey: ['monitor-overview'] });
       queryClient.invalidateQueries({ queryKey: ['monitor-active'] });
@@ -162,7 +162,9 @@ export function TaskMonitor() {
               title: '操作', width: 140,
               render: (_, t) => [0, 1, 6].includes(t.status)
                 ? <Button size="small" danger onClick={() => act.mutate({ id: t.id, action: 'stop' })}>停止</Button>
-                : <Button size="small" onClick={() => act.mutate({ id: t.id, action: 'retry' })}>重试</Button>,
+                : t.status === 7
+                  ? <Space size={0}><Button size="small" onClick={() => act.mutate({ id: t.id, action: 'resume' })}>继续</Button><Button size="small" danger onClick={() => act.mutate({ id: t.id, action: 'stop' })}>停止</Button></Space>
+                  : <Button size="small" onClick={() => act.mutate({ id: t.id, action: 'retry' })}>重试</Button>,
             },
           ]}
         />

@@ -22,7 +22,7 @@ public record StageRunScope(String businessType, Set<Long> businessIds) {
 
     /** 页级范围(LAYOUT/IMAGE/后处理) */
     public static StageRunScope pages(Collection<Long> pageIds) {
-        if (pageIds == null || pageIds.isEmpty()) {
+        if (pageIds == null) {
             return all();
         }
         return new StageRunScope("PAGE", new LinkedHashSet<>(pageIds));
@@ -43,6 +43,6 @@ public record StageRunScope(String businessType, Set<Long> businessIds) {
     }
 
     public boolean isUnbounded() {
-        return businessIds == null || businessIds.isEmpty();
+        return businessIds == null;
     }
 }

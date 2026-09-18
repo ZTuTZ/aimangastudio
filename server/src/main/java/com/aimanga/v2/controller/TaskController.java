@@ -62,6 +62,11 @@ public class TaskController {
         return Result.ok(taskService.toVO(taskService.retry(id)));
     }
 
+    @PostMapping("/{id}/resume")
+    public Result<TaskVO> resume(@PathVariable Long id) {
+        return Result.ok(taskService.toVO(taskService.resume(id)));
+    }
+
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
         taskService.delete(id);

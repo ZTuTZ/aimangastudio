@@ -163,7 +163,8 @@ export function TaskCenter() {
       key: 'actions',
       width: 130,
       render: (_, row) => {
-        const active = row.status === 0 || row.status === 1;
+        const active = row.status === 0 || row.status === 1 || row.status === 6;
+        const paused = row.status === 7;
         const finished = [2, 3, 4, 5].includes(row.status);
         return (
           <Space size={0}>
@@ -171,6 +172,16 @@ export function TaskCenter() {
               <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => withTaskAction(row, tasksApi.stop, '已请求停止')}>
                 停止
               </Button>
+            )}
+            {paused && (
+              <>
+                <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => withTaskAction(row, tasksApi.resume, '任务已恢复')}>
+                  继续
+                </Button>
+                <Button type="link" size="small" danger style={{ paddingInline: 4 }} onClick={() => withTaskAction(row, tasksApi.stop, '已停止')}>
+                  停止
+                </Button>
+              </>
             )}
             {finished && (
               <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => withTaskAction(row, tasksApi.retry, '已重新入队')}>

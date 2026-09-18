@@ -246,6 +246,42 @@ public class PipelineStageService {
                 .set(PipelineStageItem::getClaimedAt, null));
     }
 
+    /** 仅重试本次任务范围内失败的业务单元，避免局部任务唤醒其他章节的失败 Item。 */
+    public int resetFailedItemsByBusiness(Long projectId, String stageType, String businessType,
+                                          List<Long> businessIds) {
+        if (businessIds == null || businessIds.isEmpty()) {
+            return 0;
+        }
+        return itemMapper.update(null, new LambdaUpdateWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getProjectId, projectId)
+                .eq(PipelineStageItem::getStageType, stageType)
+                .eq(PipelineStageItem::getBusinessType, businessType)
+                .in(PipelineStageItem::getBusinessId, businessIds)
+                .eq(PipelineStageItem::getStatus, PipelineStageItem.STATUS_FAILED)
+                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING)
+                .set(PipelineStageItem::getAttemptToken, null)
+                .set(PipelineStageItem::getClaimedAt, null));
+    }
+
+    /** 脚本版本或用户参数要求重新生成时，仅把目标范围内已成功的旧 Item 重新入队。 */
+    public int resetSuccessfulItemsByBusiness(Long projectId, String stageType, String businessType,
+                                              List<Long> businessIds) {
+        if (businessIds == null || businessIds.isEmpty()) {
+            return 0;
+        }
+        return itemMapper.update(null, new LambdaUpdateWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getProjectId, projectId)
+                .eq(PipelineStageItem::getStageType, stageType)
+                .eq(PipelineStageItem::getBusinessType, businessType)
+                .in(PipelineStageItem::getBusinessId, businessIds)
+                .eq(PipelineStageItem::getStatus, PipelineStageItem.STATUS_SUCCESS)
+                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING)
+                .set(PipelineStageItem::getResultRef, "")
+                .set(PipelineStageItem::getErrorMessage, "")
+                .set(PipelineStageItem::getAttemptToken, null)
+                .set(PipelineStageItem::getClaimedAt, null));
+    }
+
     /** 精准重置:手动重生成指定业务单元时,把对应 Item 重置为排队(不影响其他失败单元) */
     public int resetItemsByBusiness(Long projectId, String stageType, String businessType, List<Long> businessIds) {
         if (businessIds == null || businessIds.isEmpty()) {
@@ -266,6 +302,8 @@ public class PipelineStageService {
      * 强制重置(Phase 5.11 T5.11.1):用户点击「生成/重新生成」时使用。
      * 与 resetItemsByBusiness 的区别:SUCCESS 也会被重置(否则已有素材的资产点重生成不会触发新生成),
      * 并清空 retry_count/result_ref/error_message,从零开始。
+     * 不触碰 RUNNING Item：其 attempt token 已交给执行器，强制重置必须等待该次提交收尾，
+     * 否则会让仍在运行的请求丢失 fencing 保护。
      * result_ref 写入 {"force":true} 标记,处理器据此跳过幂等检查强制重画。
      * 普通失败续跑请使用 resetFailedItems,不得混用。
      */
@@ -278,6 +316,8 @@ public class PipelineStageService {
                 .eq(PipelineStageItem::getStageType, stageType)
                 .eq(PipelineStageItem::getBusinessType, businessType)
                 .in(PipelineStageItem::getBusinessId, businessIds)
+                .in(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING,
+                        PipelineStageItem.STATUS_SUCCESS, PipelineStageItem.STATUS_FAILED)
                 .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING)
                 .set(PipelineStageItem::getRetryCount, 0)
                 .set(PipelineStageItem::getResultRef, "{\"force\":true}")

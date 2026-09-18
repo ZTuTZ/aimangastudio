@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -51,6 +52,7 @@ public class TextLayerService {
     }
 
     /** 首次初始化:从 page.dialogue/narration 生成默认规则布局(幂等:已有元素直接返回) */
+    @Transactional
     public TextLayerDto initializeFromPage(Long pageId) {
         PageEntity page = requirePage(pageId);
         List<PageTextElement> existing = listElements(pageId);
@@ -83,6 +85,7 @@ public class TextLayerService {
     }
 
     /** 保存用户编辑:按 element_uid 增删改(新元素 sourceType=MANUAL),坐标钳制到 0~1 */
+    @Transactional
     public TextLayerDto saveTextLayer(Long pageId, TextLayerDto dto) {
         PageEntity page = requirePage(pageId);
         if (dto == null || dto.elements() == null) {
@@ -155,6 +158,7 @@ public class TextLayerService {
     }
 
     /** 重置:清空后按当前脚本重新生成默认布局 */
+    @Transactional
     public TextLayerDto resetTextLayer(Long pageId) {
         requirePage(pageId);
         elementMapper.delete(new LambdaQueryWrapper<PageTextElement>()
@@ -163,6 +167,7 @@ public class TextLayerService {
     }
 
     /** 脚本同步(T7.8.16):更新 speaker/text,保留位置;新增对话创建元素,删除对话移除元素 */
+    @Transactional
     public TextLayerDto syncFromPageContent(Long pageId) {
         PageEntity page = requirePage(pageId);
         List<PageTextElement> elements = listElements(pageId);

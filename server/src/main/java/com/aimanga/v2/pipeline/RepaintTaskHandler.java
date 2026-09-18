@@ -21,6 +21,6 @@ public class RepaintTaskHandler extends PostProcessTaskHandler {
 
     @Override
     protected String op() {
-        return PostProcessService.OP_COLORIZE;
+        return PostProcessService.OP_REPAINT;
     }
 }

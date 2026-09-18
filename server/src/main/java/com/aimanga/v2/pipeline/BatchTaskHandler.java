@@ -64,7 +64,8 @@ public class BatchTaskHandler implements TaskHandler {
                 if (n.canConvertToLong()) chapterIds.add(n.asLong());
             });
         }
-        boolean scopeSingleChapter = "CHAPTER".equals(scope);
+        boolean scopedScope = "CHAPTER".equals(scope) || "CHAPTERS".equals(scope);
+        boolean projectWide = "PROJECT".equals(scope);
         String colorMode = payload.path("colorMode").asText(null);
         boolean skipGenerated = payload.path("skipGenerated").asBoolean(true);
         boolean forceLayout = payload.path("forceLayout").asBoolean(false);
@@ -110,14 +111,14 @@ public class BatchTaskHandler implements TaskHandler {
         runtime.begin(Math.max(1, totalSteps));
 
         // Phase 8.2:scoped run —— 单话/多话 BATCH 只允许执行目标页的 Item
-        StageRunScope pageScope = scopeSingleChapter
+        StageRunScope pageScope = scopedScope
                 ? StageRunScope.pages(pages.stream().map(PageEntity::getId).toList())
                 : StageRunScope.all();
 
         // ===== 阶段一:LAYOUT(T6.3.4;直接出图模式整段跳过) =====
         if (!directOutput) {
             stageService.markRunning(project.getId(), PipelineStageService.STAGE_LAYOUT);
-            syncLayoutItems(project.getId(), pages, forceLayout, !scopeSingleChapter);
+            syncLayoutItems(project.getId(), pages, forceLayout, projectWide);
             stageRunner.run(project.getId(), PipelineStageService.STAGE_LAYOUT, pageScope, runtime,
                     execution -> {
                         PipelineStageItem item = execution.item();
@@ -142,7 +143,7 @@ public class BatchTaskHandler implements TaskHandler {
         // ===== 阶段二:IMAGE(成品页并发) =====
         stageService.markRunning(project.getId(), PipelineStageService.STAGE_IMAGE);
         List<PageEntity> pagesAfterLayout = targetPages(project.getId(), chapterId, chapterIds);
-        syncImageItems(project.getId(), pagesAfterLayout, skipGenerated, forceImage, "PROJECT".equals(scope));
+        syncImageItems(project.getId(), pagesAfterLayout, skipGenerated, forceImage, projectWide);
         stageRunner.run(project.getId(), PipelineStageService.STAGE_IMAGE, pageScope, runtime,
                 execution -> {
                     PipelineStageItem item = execution.item();
@@ -165,7 +166,7 @@ public class BatchTaskHandler implements TaskHandler {
                 }, stageRunner.imageEngine());
 
         // ===== 汇总(T6.3.7 + Phase 8.2:整部重算项目状态,修复 P0-3) =====
-        summarize(project, pagesAfterLayout, "PROJECT".equals(scope), directOutput);
+        summarize(project, pagesAfterLayout, projectWide, directOutput);
     }
 
     /** 汇总(Phase 8.2):阶段终态刷新 + 话/项目状态由 ProjectCompletionService 整部重算(修复 P0-3);默认封面(T6.3.9,仅整部) */
@@ -217,7 +218,11 @@ public class BatchTaskHandler implements TaskHandler {
             stageService.forceResetItemsByBusiness(projectId, PipelineStageService.STAGE_LAYOUT,
                     BUSINESS_TYPE_PAGE, pages.stream().map(PageEntity::getId).toList());
         } else {
-            stageService.resetFailedItems(projectId, PipelineStageService.STAGE_LAYOUT);
+            stageService.resetSuccessfulItemsByBusiness(projectId, PipelineStageService.STAGE_LAYOUT,
+                    BUSINESS_TYPE_PAGE, pages.stream().filter(BatchTaskHandler::staleOrMissingLayout)
+                            .map(PageEntity::getId).toList());
+            stageService.resetFailedItemsByBusiness(projectId, PipelineStageService.STAGE_LAYOUT,
+                    BUSINESS_TYPE_PAGE, pages.stream().map(PageEntity::getId).toList());
         }
     }
 
@@ -237,7 +242,10 @@ public class BatchTaskHandler implements TaskHandler {
             stageService.forceResetItemsByBusiness(projectId, PipelineStageService.STAGE_IMAGE,
                     BUSINESS_TYPE_PAGE, needGen);
         } else {
-            stageService.resetFailedItems(projectId, PipelineStageService.STAGE_IMAGE);
+            stageService.resetSuccessfulItemsByBusiness(projectId, PipelineStageService.STAGE_IMAGE,
+                    BUSINESS_TYPE_PAGE, needGen);
+            stageService.resetFailedItemsByBusiness(projectId, PipelineStageService.STAGE_IMAGE,
+                    BUSINESS_TYPE_PAGE, needGen);
         }
     }
 
@@ -287,6 +295,15 @@ public class BatchTaskHandler implements TaskHandler {
         int scriptVersion = p.getScriptVersion() == null ? 1 : p.getScriptVersion();
         Integer imageVersion = p.getImageScriptVersion();
         return imageVersion == null || imageVersion < scriptVersion;
+    }
+
+    private static boolean staleOrMissingLayout(PageEntity p) {
+        if (blank(p.getLayoutImageUrl())) {
+            return true;
+        }
+        int scriptVersion = p.getScriptVersion() == null ? 1 : p.getScriptVersion();
+        Integer layoutVersion = p.getLayoutScriptVersion();
+        return layoutVersion == null || layoutVersion < scriptVersion;
     }
 
     private JsonNode parse(String payload) {

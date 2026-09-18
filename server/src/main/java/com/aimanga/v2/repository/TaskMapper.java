@@ -25,6 +25,15 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
             "WHERE id = #{id} AND claim_token = #{token} AND status = 1")
     int heartbeat(@Param("id") Long id, @Param("token") String token, @Param("leaseSeconds") int leaseSeconds);
 
+    /** 运行时进度写入必须仍由当前租约持有者提交，避免已被回收的旧 Worker 覆盖新 Attempt。 */
+    @Update("UPDATE task SET total_count = #{total}, success_count = #{success}, fail_count = #{fail}, " +
+            "processed_count = #{processed}, progress = #{progress} " +
+            "WHERE id = #{id} AND claim_token = #{token} AND status = 1")
+    int updateProgress(@Param("id") Long id, @Param("token") String token,
+                       @Param("total") int total, @Param("success") int success,
+                       @Param("fail") int fail, @Param("processed") int processed,
+                       @Param("progress") int progress);
+
     /** 终态/暂停写入后清租约 */
     @Update("UPDATE task SET lease_until = NULL, worker_instance_id = NULL WHERE id = #{id} " +
             "AND claim_token IS NULL")
@@ -73,7 +82,7 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
     List<TaskEntity> selectZombies();
 
     /** 租约/执行超时的回收(Phase 8.4):以 claim_token 为围栏,不看心跳时间 */
-    @Update("UPDATE task SET status = 0, claim_token = NULL, heartbeat_time = NULL, " +
+    @Update("UPDATE task SET status = 0, retry_count = retry_count + 1, claim_token = NULL, heartbeat_time = NULL, " +
             "lease_until = NULL, worker_instance_id = NULL, error = #{error}, last_error = #{error} " +
             "WHERE id = #{id} AND claim_token = #{token} AND status = 1")
     int requeueRevoked(@Param("id") Long id, @Param("token") String token, @Param("error") String error);
@@ -87,16 +96,6 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
     @Select("SELECT * FROM task WHERE status = 0 AND create_time < DATE_SUB(NOW(), INTERVAL 60 SECOND)")
     List<TaskEntity> selectStalePending();
 
-    @Select("""
-            SELECT COUNT(*)
-            FROM task t
-            LEFT JOIN project p ON t.project_id = p.id
-            WHERE (#{userId} IS NULL OR t.user_id = #{userId})
-              AND (#{status} IS NULL OR t.status = #{status})
-              AND (#{type} IS NULL OR t.task_type = #{type})
-              AND (#{projectId} IS NULL OR t.project_id = #{projectId})
-              AND (#{keyword} IS NULL OR p.title LIKE CONCAT('%', #{keyword}, '%'))
-            """)
     /** 暂停任务(Phase 8.3):RUNNING → PAUSED,保留 payload/进度/计数,清执行锁与心跳 */
     @Update("UPDATE task SET status = 7, claim_token = NULL, heartbeat_time = NULL, " +
             "lease_until = NULL, worker_instance_id = NULL " +
@@ -108,6 +107,16 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
             "WHERE id = #{id} AND status = 7")
     int resumeTask(@Param("id") Long id);
 
+    @Select("""
+            SELECT COUNT(*)
+            FROM task t
+            LEFT JOIN project p ON t.project_id = p.id
+            WHERE (#{userId} IS NULL OR t.user_id = #{userId})
+              AND (#{status} IS NULL OR t.status = #{status})
+              AND (#{type} IS NULL OR t.task_type = #{type})
+              AND (#{projectId} IS NULL OR t.project_id = #{projectId})
+              AND (#{keyword} IS NULL OR p.title LIKE CONCAT('%', #{keyword}, '%'))
+            """)
     long countFiltered(@Param("userId") Long userId,
                        @Param("status") Integer status,
                        @Param("type") String type,

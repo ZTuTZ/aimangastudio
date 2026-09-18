@@ -129,11 +129,23 @@ public class LayoutTaskHandler implements TaskHandler {
                     pages.stream().map(PageEntity::getId).toList());
         }
         List<Long> needLayout = pages.stream()
-                .filter(p -> p.getLayoutImageUrl() == null || p.getLayoutImageUrl().isBlank())
+                .filter(LayoutTaskHandler::staleOrMissingLayout)
                 .map(PageEntity::getId)
                 .toList();
         stageService.createItems(project.getId(), PipelineStageService.STAGE_LAYOUT, BUSINESS_TYPE_PAGE, needLayout);
-        stageService.resetFailedItems(project.getId(), PipelineStageService.STAGE_LAYOUT);
+        List<Long> targetPageIds = pages.stream().map(PageEntity::getId).toList();
+        stageService.resetSuccessfulItemsByBusiness(project.getId(), PipelineStageService.STAGE_LAYOUT,
+                BUSINESS_TYPE_PAGE, needLayout);
+        stageService.resetFailedItemsByBusiness(project.getId(), PipelineStageService.STAGE_LAYOUT,
+                BUSINESS_TYPE_PAGE, targetPageIds);
+    }
+
+    private static boolean staleOrMissingLayout(PageEntity page) {
+        if (page.getLayoutImageUrl() == null || page.getLayoutImageUrl().isBlank()) {
+            return true;
+        }
+        int scriptVersion = page.getScriptVersion() == null ? 1 : page.getScriptVersion();
+        return page.getLayoutScriptVersion() == null || page.getLayoutScriptVersion() < scriptVersion;
     }
 
     private Long parseId(String payload, String field) {

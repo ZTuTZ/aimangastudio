@@ -86,14 +86,11 @@ public class TaskRuntime {
     }
 
     private void persist() {
-        TaskEntity patch = new TaskEntity();
-        patch.setId(task.getId());
-        patch.setTotalCount(total);
-        patch.setSuccessCount(success.get());
-        patch.setFailCount(fail.get());
-        patch.setProcessedCount(success.get() + fail.get());
-        patch.setProgress(progress);
-        taskMapper.updateById(patch);
+        int updated = taskMapper.updateProgress(task.getId(), task.getClaimToken(), total, success.get(), fail.get(),
+                success.get() + fail.get(), progress);
+        if (updated == 0) {
+            throw new TaskStopSignal();
+        }
         publisher.publishProgress(task, progress, success.get(), fail.get(), total);
     }
 }

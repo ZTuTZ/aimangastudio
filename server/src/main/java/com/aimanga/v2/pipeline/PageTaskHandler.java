@@ -34,6 +34,7 @@ public class PageTaskHandler implements TaskHandler {
     private final ConcurrentStageRunner stageRunner;
     private final StageItemCommitService commitService;
     private final GenerationRecordService generationRecordService;
+    private final ProjectCompletionService projectCompletionService;
 
     @Override
     public String type() {
@@ -87,6 +88,11 @@ public class PageTaskHandler implements TaskHandler {
         if (stats.failed() == 0) {
             stageService.updateStageProgress(project.getId(), PipelineStageService.STAGE_IMAGE);
         }
+        PageEntity latest = ctx.pageMapper.selectById(pageId);
+        if (latest != null) {
+            projectCompletionService.recalculateChapter(latest.getChapterId());
+        }
+        projectCompletionService.recalculateProject(project.getId());
     }
 
     private Long parseId(String payload, String field) {

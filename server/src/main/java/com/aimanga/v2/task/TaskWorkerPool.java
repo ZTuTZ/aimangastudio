@@ -39,6 +39,7 @@ public class TaskWorkerPool {
 
     private static class WorkerHandle {
         final AtomicBoolean stopRequested = new AtomicBoolean(false);
+        final AtomicBoolean running = new AtomicBoolean(false);
         volatile Future<?> future;
     }
 
@@ -117,10 +118,8 @@ public class TaskWorkerPool {
         log.info("[task] Worker 池已关闭(未完成任务由 lease/watchdog 接管)");
     }
 
-    private volatile long runningTaskId = -1;
-
     private boolean isRunningTask(WorkerHandle w) {
-        return runningTaskId != -1;
+        return w.running.get();
     }
 
     private void workerLoop(WorkerHandle handle) {
@@ -131,23 +130,33 @@ public class TaskWorkerPool {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
+            } catch (RuntimeException e) {
+                // Redis 短暂故障不能让 Worker 永久退出；下一轮 poll 继续恢复队列消费。
+                log.error("[task] worker 拉取队列失败，将重试", e);
+                continue;
             }
             if (taskId == null) {
                 continue; // 轮询超时,重新检查 stopRequested
             }
-            taskQueue.removeMarker(taskId);
+            try {
+                taskQueue.removeMarker(taskId);
+            } catch (RuntimeException e) {
+                log.error("[task] worker 清理队列标记失败 taskId={}，将重试", taskId, e);
+                taskQueue.enqueueDelayed(taskId, 2000);
+                continue;
+            }
             if (handle.stopRequested.get()) {
                 // 缩容/停机请求到达:任务放回队列,由其他 Worker 继续
                 taskQueue.enqueue(taskId);
                 return;
             }
-            runningTaskId = taskId;
+            handle.running.set(true);
             try {
                 executeWithPermit(taskId);
             } catch (Exception e) {
                 log.error("[task] worker 执行异常 taskId={}", taskId, e);
             } finally {
-                runningTaskId = -1;
+                handle.running.set(false);
             }
         }
     }

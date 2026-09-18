@@ -1,21 +1,14 @@
 package com.aimanga.v2.storage;
 
 import com.aimanga.v2.common.BusinessException;
+import com.aimanga.v2.pipeline.RemoteImageFetcher;
 import com.aimanga.v2.service.ConfigService;
 import com.aliyun.oss.OSS;
 import com.aliyun.oss.OSSClientBuilder;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Map;
@@ -28,7 +21,6 @@ import java.util.Set;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class OssStorageService implements StorageService {
 
     private static final Set<String> ALLOWED_EXTS = Set.of("png", "jpg", "jpeg", "webp", "gif", "avif", "bmp");
@@ -36,13 +28,21 @@ public class OssStorageService implements StorageService {
     private static final Random RANDOM = new Random();
 
     private final ConfigService configService;
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
+    private final RemoteImageFetcher remoteImageFetcher;
 
     private volatile OSS client;
     private volatile String clientKey = "";
+
+    @Autowired
+    public OssStorageService(ConfigService configService, RemoteImageFetcher remoteImageFetcher) {
+        this.configService = configService;
+        this.remoteImageFetcher = remoteImageFetcher;
+    }
+
+    /** 便于非 Spring 的单元测试构造；生产环境始终注入同一个安全拉取器。 */
+    public OssStorageService(ConfigService configService) {
+        this(configService, new RemoteImageFetcher(configService));
+    }
 
     @Override
     public boolean isConfigured() {
@@ -68,9 +68,11 @@ public class OssStorageService implements StorageService {
         if (url != null && url.startsWith(host)) {
             return url;
         }
-        byte[] data = download(url);
-        String ext = extFromUrlOrData(url, data);
-        return saveImage(dir, userId, data, ext);
+        try (RemoteImageFetcher.FetchResult fetch = remoteImageFetcher.fetchStream(url)) {
+            String key = buildKey(dir, userId, extFromMimeOrUrl(fetch.mime(), url));
+            client().putObject(bucket(), key, fetch.inputStream());
+            return publicUrl(key);
+        }
     }
 
     @Override
@@ -142,32 +144,17 @@ public class OssStorageService implements StorageService {
         return (dir == null ? "misc" : dir) + "/" + (userId == null ? 0 : userId) + "/" + day + "/" + name;
     }
 
-    private byte[] download(String url) {
-        if (url == null || (!url.startsWith("http://") && !url.startsWith("https://"))) {
-            throw new BusinessException(400, "无效的图片地址: " + url);
+    private String extFromMimeOrUrl(String mime, String url) {
+        if (mime != null) {
+            return switch (mime) {
+                case "image/jpeg" -> "jpg";
+                case "image/png" -> "png";
+                case "image/webp" -> "webp";
+                case "image/gif" -> "gif";
+                case "image/avif" -> "avif";
+                default -> "png";
+            };
         }
-        try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-                    .timeout(Duration.ofSeconds(60))
-                    .GET()
-                    .build();
-            HttpResponse<byte[]> response = http.send(request, HttpResponse.BodyHandlers.ofByteArray());
-            if (response.statusCode() >= 400) {
-                throw new BusinessException(502, "图片下载失败 HTTP " + response.statusCode() + ": " + url);
-            }
-            if (response.body() == null || response.body().length == 0) {
-                throw new BusinessException(502, "图片下载内容为空: " + url);
-            }
-            return response.body();
-        } catch (IOException e) {
-            throw new BusinessException(502, "图片下载失败: " + e.getMessage());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new BusinessException(502, "图片下载被中断");
-        }
-    }
-
-    private String extFromUrlOrData(String url, byte[] data) {
         String lower = url == null ? "" : url.toLowerCase();
         int q = lower.indexOf('?');
         String path = q > 0 ? lower.substring(0, q) : lower;
@@ -175,13 +162,6 @@ public class OssStorageService implements StorageService {
             if (path.endsWith("." + ext)) {
                 return "jpeg".equals(ext) ? "jpg" : ext;
             }
-        }
-        // 从 magic bytes 猜测
-        if (data.length > 3) {
-            if ((data[0] & 0xFF) == 0x89 && data[1] == 'P') return "png";
-            if ((data[0] & 0xFF) == 0xFF && (data[1] & 0xFF) == 0xD8) return "jpg";
-            if (data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F') return "webp";
-            if (data[0] == 'G' && data[1] == 'I' && data[2] == 'F') return "gif";
         }
         return "png";
     }

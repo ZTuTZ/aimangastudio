@@ -89,10 +89,12 @@ public class RedisConcurrencyLimiter {
 
     // ---------- 业务封装(替换原 RedisSemaphores 对外方法) ----------
 
-    /** 用户并发许可(层②):TTL 10 分钟 */
+    /** 用户并发许可(层②):覆盖任务最长执行时限并留出清理余量，避免长任务许可中途过期。 */
     public String tryAcquireUser(long userId) {
         int max = Math.max(1, configService.getInt("task_user_concurrency", 2));
-        return tryAcquire("user", String.valueOf(userId), max, Duration.ofMinutes(10).toMillis());
+        long ttl = Math.max(Duration.ofMinutes(10).toMillis(),
+                configService.getInt("task_max_execution_seconds", 1800) * 1000L + 120_000L);
+        return tryAcquire("user", String.valueOf(userId), max, ttl);
     }
 
     public void releaseUser(long userId, String permitToken) {

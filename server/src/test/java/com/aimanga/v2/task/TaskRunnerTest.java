@@ -47,6 +47,7 @@ class TaskRunnerTest {
         when(mapper.claim(org.mockito.ArgumentMatchers.eq(1L), anyString(), org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyInt())).thenReturn(1);
         when(mapper.selectById(1L)).thenReturn(task);
+        when(mapper.updateProgress(eq(1L), anyString(), anyInt(), anyInt(), anyInt(), anyInt(), anyInt())).thenReturn(1);
     }
 
     @Test
@@ -136,5 +137,19 @@ class TaskRunnerTest {
         verify(mapper, atLeastOnce()).finishTask(eq(1L), anyString(), statusCaptor.capture(), anyInt(), errorCaptor.capture());
         assertThat(statusCaptor.getValue()).isEqualTo(TaskStatus.FAILED);
         assertThat(errorCaptor.getValue()).contains("暂未实现");
+    }
+
+    @Test
+    void progressWritesAreFencedByTheClaimToken() throws Exception {
+        doAnswer(inv -> {
+            TaskRuntime rt = inv.getArgument(1);
+            rt.begin(1);
+            return null;
+        }).when(handler).run(any(), any());
+
+        runner.run(1L);
+
+        verify(mapper, never()).updateById(any(TaskEntity.class));
+        verify(mapper, atLeastOnce()).updateProgress(eq(1L), anyString(), eq(1), eq(0), eq(0), eq(0), eq(0));
     }
 }

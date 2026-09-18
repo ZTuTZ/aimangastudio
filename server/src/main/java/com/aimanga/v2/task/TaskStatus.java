@@ -26,7 +26,7 @@ public final class TaskStatus {
 
     /** 调度中:Worker/队列视角的活跃状态 */
     public static boolean active(int status) {
-        return status == PENDING || status == RUNNING || status == STOPPING;
+        return status == PENDING || status == RUNNING || status == STOPPING || status == PAUSED;
     }
 
     /** 执行中 */

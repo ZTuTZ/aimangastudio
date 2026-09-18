@@ -57,7 +57,10 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
             if (pageId == null) {
                 throw new BusinessException(400, type + " 任务需要在 payload 中提供 pageId");
             }
-            pageService.requireAccessible(pageId);
+            var page = pageService.requireAccessible(pageId);
+            if (!project.getId().equals(page.getProjectId())) {
+                throw new BusinessException(400, "页面不属于当前作品");
+            }
         }
         TaskEntity task = new TaskEntity();
         task.setUserId(CurrentUser.id());
@@ -120,6 +123,16 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
             patch.setId(taskId);
             patch.setStatus(TaskStatus.STOPPING);
             updateById(patch);
+        } else if (status == TaskStatus.PAUSED) {
+            int updated = baseMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<TaskEntity>()
+                    .eq(TaskEntity::getId, taskId)
+                    .eq(TaskEntity::getStatus, TaskStatus.PAUSED)
+                    .set(TaskEntity::getStatus, TaskStatus.STOPPED)
+                    .set(TaskEntity::getError, "已停止")
+                    .set(TaskEntity::getEndTime, LocalDateTime.now()));
+            if (updated == 0) {
+                throw new BusinessException(409, "任务状态已变化,请刷新后重试");
+            }
         } else {
             throw new BusinessException(409, "任务已结束,无需停止");
         }
@@ -268,7 +281,8 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
                         .eq(chapterId != null, TaskEntity::getChapterId, chapterId)
                         .isNull(chapterId == null, TaskEntity::getChapterId)
                         .eq(TaskEntity::getTaskType, type)
-                        .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.STOPPING));
+                        .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING,
+                                TaskStatus.STOPPING, TaskStatus.PAUSED));
                 if (active != null && active > 0) {
                     return false;
                 }
@@ -302,10 +316,14 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
                         .eq(chapterId != null, TaskEntity::getChapterId, chapterId)
                         .isNull(chapterId == null, TaskEntity::getChapterId)
                         .eq(TaskEntity::getTaskType, type)
-                        .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.STOPPING)
+                        .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING,
+                                TaskStatus.STOPPING, TaskStatus.PAUSED)
                         .orderByDesc(TaskEntity::getId)
                         .last("LIMIT 1"));
                 if (active != null) {
+                    if (!java.util.Objects.equals(active.getPayload(), payloadJson == null || payloadJson.isBlank() ? "{}" : payloadJson)) {
+                        throw new BusinessException(409, "已有相同类型的任务正在执行或暂停;请先继续或停止该任务");
+                    }
                     log.info("[task] 复用活跃任务 type={} id={} projectId={}", type, active.getId(), projectId);
                     return toVO(active);
                 }
