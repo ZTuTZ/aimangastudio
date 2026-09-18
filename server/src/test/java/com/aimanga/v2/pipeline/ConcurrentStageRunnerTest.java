@@ -96,7 +96,7 @@ class ConcurrentStageRunnerTest {
 
         AtomicInteger active = new AtomicInteger();
         AtomicInteger maxActive = new AtomicInteger();
-        ConcurrentStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, runtime, it -> {
+        ConcurrentStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, StageRunScope.all(), runtime, it -> {
             int now = active.incrementAndGet();
             maxActive.accumulateAndGet(now, Math::max);
             Thread.sleep(200);
@@ -118,7 +118,7 @@ class ConcurrentStageRunnerTest {
         when(stageService.getItem(1L)).thenReturn(item(1L, 11L, 0), item(1L, 11L, 1));
 
         AtomicInteger attempts = new AtomicInteger();
-        ConcurrentStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, runtime, it -> {
+        ConcurrentStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, StageRunScope.all(), runtime, it -> {
             if (attempts.incrementAndGet() == 1) {
                 throw new RuntimeException("模型未返回图片");
             }
@@ -141,7 +141,7 @@ class ConcurrentStageRunnerTest {
         when(stageService.getItem(1L)).thenReturn(item(1L, 11L, 0), item(1L, 11L, 1));
 
         AtomicInteger attempts = new AtomicInteger();
-        ConcurrentStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, runtime, it -> {
+        ConcurrentStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, StageRunScope.all(), runtime, it -> {
             attempts.incrementAndGet();
             throw new RuntimeException("通道超时");
         }, runner.imageEngine());
@@ -158,7 +158,7 @@ class ConcurrentStageRunnerTest {
     void stagePaused_claimsNothing() {
         when(stageService.isStagePaused(PROJECT_ID, STAGE)).thenReturn(true);
 
-        ConcurrentStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, runtime, it -> "{}", runner.imageEngine());
+        ConcurrentStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, StageRunScope.all(), runtime, it -> "{}", runner.imageEngine());
 
         assertThat(result.paused()).isTrue();
         verify(stageService, never()).getPendingItemIds(anyLong(), anyString(), anyInt());
@@ -169,7 +169,7 @@ class ConcurrentStageRunnerTest {
     void userStop_propagatesStopSignal() {
         org.mockito.Mockito.doThrow(new TaskStopSignal()).when(runtime).checkStop();
 
-        assertThatThrownBy(() -> runner.run(PROJECT_ID, STAGE, runtime, it -> "{}", runner.imageEngine()))
+        assertThatThrownBy(() -> runner.run(PROJECT_ID, STAGE, StageRunScope.all(), runtime, it -> "{}", runner.imageEngine()))
                 .isInstanceOf(TaskStopSignal.class);
         verify(stageService, never()).claimItem(anyLong(), anyString());
     }
@@ -179,7 +179,7 @@ class ConcurrentStageRunnerTest {
         when(stageService.resetRunningItems(PROJECT_ID, STAGE)).thenReturn(3);
         when(stageService.getPendingItemIds(PROJECT_ID, STAGE, 64)).thenReturn(List.of());
 
-        runner.run(PROJECT_ID, STAGE, runtime, it -> "{}", runner.imageEngine());
+        runner.run(PROJECT_ID, STAGE, StageRunScope.all(), runtime, it -> "{}", runner.imageEngine());
 
         verify(stageService).resetRunningItems(PROJECT_ID, STAGE);
     }
@@ -193,7 +193,7 @@ class ConcurrentStageRunnerTest {
         // 第 1 次(主循环喂 Item 前)放行,第 2 次起(Worker 内)抛停止信号
         org.mockito.Mockito.doNothing().doThrow(new TaskStopSignal()).when(runtime).checkStop();
 
-        assertThatThrownBy(() -> runner.run(PROJECT_ID, STAGE, runtime, it -> "{}", runner.imageEngine()))
+        assertThatThrownBy(() -> runner.run(PROJECT_ID, STAGE, StageRunScope.all(), runtime, it -> "{}", runner.imageEngine()))
                 .isInstanceOf(TaskStopSignal.class);
 
         verify(stageService, atLeastOnce()).releaseItem(org.mockito.ArgumentMatchers.eq(1L), anyString());
@@ -211,7 +211,7 @@ class ConcurrentStageRunnerTest {
         scriptPool.init();
         ConcurrentStageRunner second = new ConcurrentStageRunner(stageService, workerPool, scriptPool, configService, redisson);
 
-        assertThatThrownBy(() -> second.run(PROJECT_ID, STAGE, runtime, it -> "{}", second.imageEngine()))
+        assertThatThrownBy(() -> second.run(PROJECT_ID, STAGE, StageRunScope.all(), runtime, it -> "{}", second.imageEngine()))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("已有生成任务在执行中");
         verify(stageService, never()).resetRunningItems(anyLong(), anyString());

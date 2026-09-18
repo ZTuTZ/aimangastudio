@@ -52,7 +52,7 @@ public abstract class PostProcessTaskHandler implements TaskHandler {
         PipelineStageService.StageItemStats before = stageService.getItemStats(project.getId(), stageType);
         runtime.begin((int) Math.max(1, before.pending()));
 
-        stageRunner.run(project.getId(), stageType, runtime,
+        stageRunner.run(project.getId(), stageType, StageRunScope.page(pageId), runtime,
                 execution -> {
                     PipelineStageItem item = execution.item();
                     PageEntity page = ctx.pageMapper.selectById(item.getBusinessId());

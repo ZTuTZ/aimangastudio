@@ -43,6 +43,7 @@ public class BatchTaskHandler implements TaskHandler {
     private final ConcurrentStageRunner stageRunner;
     private final StageItemCommitService commitService;
     private final GenerationRecordService generationRecordService;
+    private final ProjectCompletionService projectCompletionService;
 
     @Override
     public String type() {
@@ -63,6 +64,7 @@ public class BatchTaskHandler implements TaskHandler {
                 if (n.canConvertToLong()) chapterIds.add(n.asLong());
             });
         }
+        boolean scopeSingleChapter = "CHAPTER".equals(scope);
         String colorMode = payload.path("colorMode").asText(null);
         boolean skipGenerated = payload.path("skipGenerated").asBoolean(true);
         boolean forceLayout = payload.path("forceLayout").asBoolean(false);
@@ -107,11 +109,16 @@ public class BatchTaskHandler implements TaskHandler {
                 .count();
         runtime.begin(Math.max(1, totalSteps));
 
+        // Phase 8.2:scoped run —— 单话/多话 BATCH 只允许执行目标页的 Item
+        StageRunScope pageScope = scopeSingleChapter
+                ? StageRunScope.pages(pages.stream().map(PageEntity::getId).toList())
+                : StageRunScope.all();
+
         // ===== 阶段一:LAYOUT(T6.3.4;直接出图模式整段跳过) =====
         if (!directOutput) {
             stageService.markRunning(project.getId(), PipelineStageService.STAGE_LAYOUT);
-            syncLayoutItems(project.getId(), pages, forceLayout);
-            stageRunner.run(project.getId(), PipelineStageService.STAGE_LAYOUT, runtime,
+            syncLayoutItems(project.getId(), pages, forceLayout, !scopeSingleChapter);
+            stageRunner.run(project.getId(), PipelineStageService.STAGE_LAYOUT, pageScope, runtime,
                     execution -> {
                         PipelineStageItem item = execution.item();
                         PageEntity page = pageOf(item.getBusinessId());
@@ -139,8 +146,8 @@ public class BatchTaskHandler implements TaskHandler {
         // ===== 阶段二:IMAGE(成品页并发) =====
         stageService.markRunning(project.getId(), PipelineStageService.STAGE_IMAGE);
         List<PageEntity> pagesAfterLayout = targetPages(project.getId(), chapterId, chapterIds);
-        syncImageItems(project.getId(), pagesAfterLayout, skipGenerated, forceImage);
-        stageRunner.run(project.getId(), PipelineStageService.STAGE_IMAGE, runtime,
+        syncImageItems(project.getId(), pagesAfterLayout, skipGenerated, forceImage, "PROJECT".equals(scope));
+        stageRunner.run(project.getId(), PipelineStageService.STAGE_IMAGE, pageScope, runtime,
                 execution -> {
                     PipelineStageItem item = execution.item();
                     PageEntity page = pageOf(item.getBusinessId());
@@ -165,57 +172,30 @@ public class BatchTaskHandler implements TaskHandler {
             return;
         }
 
-        // ===== 汇总(T6.3.7) =====
-        summarize(project, pagesAfterLayout, chapterId, "PROJECT".equals(scope), directOutput);
+        // ===== 汇总(T6.3.7 + Phase 8.2:整部重算项目状态,修复 P0-3) =====
+        summarize(project, pagesAfterLayout, "PROJECT".equals(scope), directOutput);
     }
 
-    /** 汇总:阶段成败、话状态、项目状态、默认封面(T6.3.9,仅整部 scope 设默认封面) */
-    private void summarize(Project project, List<PageEntity> pages, Long chapterId, boolean wholeProject, boolean directOutput) {
-        PipelineStageService.StageItemStats imageStats =
-                stageService.getItemStats(project.getId(), PipelineStageService.STAGE_IMAGE);
-        if (imageStats.failed() == 0) {
-            stageService.markSuccess(project.getId(), PipelineStageService.STAGE_IMAGE);
-        } else {
-            stageService.markFailed(project.getId(), PipelineStageService.STAGE_IMAGE,
-                    imageStats.failed() + "/" + imageStats.total() + " 页成品生成失败,重跑可续作");
-        }
-        // LAYOUT 阶段终态(直接出图模式无布局阶段,不标记)
+    /** 汇总(Phase 8.2):阶段终态刷新 + 话/项目状态由 ProjectCompletionService 整部重算(修复 P0-3);默认封面(T6.3.9,仅整部) */
+    private void summarize(Project project, List<PageEntity> pages, boolean wholeProject, boolean directOutput) {
         if (!directOutput) {
-            PipelineStageService.StageItemStats layoutStats =
-                    stageService.getItemStats(project.getId(), PipelineStageService.STAGE_LAYOUT);
-            if (layoutStats.failed() == 0) {
-                stageService.markSuccess(project.getId(), PipelineStageService.STAGE_LAYOUT);
-            }
+            stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_LAYOUT);
         }
+        stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_IMAGE);
 
-        // 话状态
         List<Long> chapterIds = pages.stream().map(PageEntity::getChapterId).distinct().toList();
-        List<PageEntity> latest = ctx.pageMapper.selectList(new LambdaQueryWrapper<PageEntity>()
-                .eq(PageEntity::getProjectId, project.getId())
-                .in(PageEntity::getChapterId, chapterIds));
         for (Long cid : chapterIds) {
-            List<PageEntity> chapterPages = latest.stream().filter(p -> p.getChapterId().equals(cid)).toList();
-            long failed = chapterPages.stream().filter(p -> p.getGenerateStatus() != null
-                    && p.getGenerateStatus() == PageEntity.GEN_FAILED).count();
-            if (failed == 0) {
-                markChapterStatus(cid, Chapter.STATUS_COMPLETE);
-            } else {
-                markChapterStatus(cid, Chapter.STATUS_PARTIAL_FAILED);
-            }
+            projectCompletionService.recalculateChapter(cid);
         }
+        projectCompletionService.recalculateProject(project.getId());
 
-        // 项目状态
-        long failedPages = latest.stream().filter(p -> p.getGenerateStatus() != null
-                && p.getGenerateStatus() == PageEntity.GEN_FAILED).count();
-        if (failedPages == 0) {
-            markProjectStatus(project.getId(), Project.STATUS_DONE);
-        } else {
-            markProjectStatus(project.getId(), Project.STATUS_PARTIAL);
-        }
-
-        // 默认封面:整部生成完成且未设人工封面时,取第一张成品页
-        if (failedPages == 0 && wholeProject
-                && (project.getCoverUrl() == null || project.getCoverUrl().isBlank())) {
+        Project fresh = ctx.project(project.getId());
+        boolean allDone = fresh.getStatus() != null && fresh.getStatus() == Project.STATUS_DONE;
+        if (allDone && wholeProject && (project.getCoverUrl() == null || project.getCoverUrl().isBlank())) {
+            List<PageEntity> latest = ctx.pageMapper.selectList(new LambdaQueryWrapper<PageEntity>()
+                    .eq(PageEntity::getProjectId, project.getId())
+                    .orderByAsc(PageEntity::getChapterId)
+                    .orderByAsc(PageEntity::getPageNo));
             latest.stream()
                     .filter(p -> p.getGenerateStatus() != null && p.getGenerateStatus() == PageEntity.GEN_SUCCESS
                             && p.getGeneratedImageUrl() != null && !p.getGeneratedImageUrl().isBlank())
@@ -229,13 +209,16 @@ public class BatchTaskHandler implements TaskHandler {
                         log.info("[batch] 作品 {} 已设默认封面(第一张成品页): {}", project.getId(), p.getGeneratedImageUrl());
                     });
         }
-        log.info("[batch] 作品 {} BATCH 汇总: 成品失败 {} 页", project.getId(), failedPages);
+        log.info("[batch] 作品 {} BATCH 汇总完成(整部={}, 状态重算)", project.getId(), wholeProject);
     }
 
-    /** LAYOUT Items:全部目标页建 Item(幂等跳过已有图);forceLayout 时全部强制重画 */
-    private void syncLayoutItems(Long projectId, List<PageEntity> pages, boolean forceLayout) {
-        stageService.removeOrphanItems(projectId, PipelineStageService.STAGE_LAYOUT, BUSINESS_TYPE_PAGE,
-                pages.stream().map(PageEntity::getId).toList());
+    /** LAYOUT Items:全部目标页建 Item(幂等跳过已有图);forceLayout 时全部强制重画。
+     *  Phase 8.2 §4.5:orphan 清理只在项目级全量跑时执行,scoped 任务不得删除其他话的 Item。 */
+    private void syncLayoutItems(Long projectId, List<PageEntity> pages, boolean forceLayout, boolean projectWide) {
+        if (projectWide) {
+            stageService.removeOrphanItems(projectId, PipelineStageService.STAGE_LAYOUT, BUSINESS_TYPE_PAGE,
+                    pages.stream().map(PageEntity::getId).toList());
+        }
         stageService.createItems(projectId, PipelineStageService.STAGE_LAYOUT, BUSINESS_TYPE_PAGE,
                 pages.stream().map(PageEntity::getId).toList());
         if (forceLayout) {
@@ -247,13 +230,16 @@ public class BatchTaskHandler implements TaskHandler {
     }
 
     /** IMAGE Items:skipGenerated=true 时只处理尚无成品图的页;forceImage 时全部强制重画 */
-    private void syncImageItems(Long projectId, List<PageEntity> pages, boolean skipGenerated, boolean forceImage) {
+    private void syncImageItems(Long projectId, List<PageEntity> pages, boolean skipGenerated, boolean forceImage,
+                                boolean projectWide) {
         List<Long> needGen = pages.stream()
                 .filter(p -> forceImage || !skipGenerated || staleOrMissing(p))
                 .map(PageEntity::getId)
                 .toList();
-        stageService.removeOrphanItems(projectId, PipelineStageService.STAGE_IMAGE, BUSINESS_TYPE_PAGE,
-                pages.stream().map(PageEntity::getId).toList());
+        if (projectWide) {
+            stageService.removeOrphanItems(projectId, PipelineStageService.STAGE_IMAGE, BUSINESS_TYPE_PAGE,
+                    pages.stream().map(PageEntity::getId).toList());
+        }
         stageService.createItems(projectId, PipelineStageService.STAGE_IMAGE, BUSINESS_TYPE_PAGE, needGen);
         if (forceImage) {
             stageService.forceResetItemsByBusiness(projectId, PipelineStageService.STAGE_IMAGE,

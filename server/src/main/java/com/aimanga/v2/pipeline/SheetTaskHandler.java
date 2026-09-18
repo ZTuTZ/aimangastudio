@@ -3,6 +3,7 @@ package com.aimanga.v2.pipeline;
 import com.aimanga.v2.ai.AiService;
 import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.Asset;
+import com.aimanga.v2.model.PipelineStage;
 import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.model.Project;
 import com.aimanga.v2.model.TaskEntity;
@@ -72,7 +73,9 @@ public class SheetTaskHandler implements TaskHandler {
         // 任务进度 = 本次要处理的数量(pending 统计含孤儿 RUNNING,Runner 回收后会照常处理)
         runtime.begin((int) before.pending());
 
-        stageRunner.run(project.getId(), PipelineStageService.STAGE_SHEET, runtime,
+        // Phase 8.2:手动勾选 → 只执行这些资产的 Item;全量跑 → 项目级
+        StageRunScope scope = assetIds.isEmpty() ? StageRunScope.all() : StageRunScope.assets(assetIds);
+        stageRunner.run(project.getId(), PipelineStageService.STAGE_SHEET, scope, runtime,
                 execution -> generateSheet(project, execution), stageRunner.imageEngine());
 
         // 暂停:阶段保持 PAUSED(pauseProject 已置),由恢复/继续重新入队
@@ -81,15 +84,14 @@ public class SheetTaskHandler implements TaskHandler {
             return;
         }
 
-        // 终态判定(以全量 Item 统计为准:单个失败已在 Runner 内重试过,重跑任务可续作)
+        // 终态判定(Phase 8.2:项目级 Stage 不因局部成功就 SUCCESS,按全部 Item 重算)
+        int stageStatus = stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_SHEET);
         PipelineStageService.StageItemStats stats = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_SHEET);
-        if (stats.failed() == 0) {
-            stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SHEET);
+        if (stageStatus == PipelineStage.STATUS_SUCCESS) {
             advanceProject(project);
             log.info("[sheet] 作品 {} SHEET 完成: {}/{} 成功", project.getId(), stats.success(), stats.total());
-        } else {
-            stageService.markFailed(project.getId(), PipelineStageService.STAGE_SHEET,
-                    stats.failed() + "/" + stats.total() + " 个角色设定表生成失败,重跑 SHEET 任务可续作");
+        } else if (stageStatus == PipelineStage.STATUS_FAILED) {
+            log.warn("[sheet] 作品 {} SHEET 存在失败: {}/{}", project.getId(), stats.failed(), stats.total());
         }
     }
 

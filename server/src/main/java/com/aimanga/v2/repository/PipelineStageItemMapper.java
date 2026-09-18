@@ -58,6 +58,22 @@ public interface PipelineStageItemMapper extends BaseMapper<PipelineStageItem> {
                                 @Param("stageType") String stageType,
                                 @Param("limit") int limit);
 
+    /** Scope 化候选查询(Phase 8.2):只领取本次 Task 允许执行的 Item */
+    @Select("<script>" +
+            "SELECT id FROM pipeline_stage_item " +
+            "WHERE project_id = #{projectId} AND stage_type = #{stageType} AND status = 0 " +
+            "<if test='businessType != null'>AND business_type = #{businessType}</if> " +
+            "<if test='businessIds != null and businessIds.size() > 0'>" +
+            "AND business_id IN <foreach item='i' collection='businessIds' open='(' separator=',' close=')'>#{i}</foreach>" +
+            "</if> " +
+            "ORDER BY business_id ASC LIMIT #{limit}" +
+            "</script>")
+    List<Long> selectPendingIdsInScope(@Param("projectId") Long projectId,
+                                       @Param("stageType") String stageType,
+                                       @Param("businessType") String businessType,
+                                       @Param("businessIds") java.util.Collection<Long> businessIds,
+                                       @Param("limit") int limit);
+
     /** 按状态分组计数(阶段进度统计用,避免全量行加载) */
     @Select("SELECT status, COUNT(*) AS cnt FROM pipeline_stage_item " +
             "WHERE project_id = #{projectId} AND stage_type = #{stageType} GROUP BY status")

@@ -58,7 +58,7 @@ public class PageTaskHandler implements TaskHandler {
                 stageService.getItemStats(project.getId(), PipelineStageService.STAGE_IMAGE);
         runtime.begin((int) Math.max(1, before.pending()));
 
-        stageRunner.run(project.getId(), PipelineStageService.STAGE_IMAGE, runtime,
+        stageRunner.run(project.getId(), PipelineStageService.STAGE_IMAGE, StageRunScope.page(pageId), runtime,
                 execution -> {
                     PipelineStageItem item = execution.item();
                     PageEntity page = ctx.pageMapper.selectById(item.getBusinessId());

@@ -3,6 +3,7 @@ package com.aimanga.v2.pipeline;
 import com.aimanga.v2.ai.AiService;
 import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.Asset;
+import com.aimanga.v2.model.PipelineStage;
 import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.model.Project;
 import com.aimanga.v2.model.TaskEntity;
@@ -63,7 +64,9 @@ public class AssetRefTaskHandler implements TaskHandler {
         }
         runtime.begin((int) before.pending());
 
-        stageRunner.run(project.getId(), PipelineStageService.STAGE_REFERENCE, runtime,
+        // Phase 8.2:手动勾选 → 只执行这些资产的 Item;全量跑 → 项目级
+        StageRunScope scope = assetIds.isEmpty() ? StageRunScope.all() : StageRunScope.assets(assetIds);
+        stageRunner.run(project.getId(), PipelineStageService.STAGE_REFERENCE, scope, runtime,
                 execution -> generateRef(project, execution), stageRunner.imageEngine());
 
         if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_REFERENCE)) {
@@ -71,13 +74,12 @@ public class AssetRefTaskHandler implements TaskHandler {
             return;
         }
 
+        int stageStatus = stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_REFERENCE);
         PipelineStageService.StageItemStats stats = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_REFERENCE);
-        if (stats.failed() == 0) {
-            stageService.markSuccess(project.getId(), PipelineStageService.STAGE_REFERENCE);
+        if (stageStatus == PipelineStage.STATUS_SUCCESS) {
             log.info("[asset-ref] 作品 {} 素材参考图完成: {}/{}", project.getId(), stats.success(), stats.total());
-        } else {
-            stageService.markFailed(project.getId(), PipelineStageService.STAGE_REFERENCE,
-                    stats.failed() + "/" + stats.total() + " 个素材参考图生成失败,重跑任务可续作");
+        } else if (stageStatus == PipelineStage.STATUS_FAILED) {
+            log.warn("[asset-ref] 作品 {} 素材参考图存在失败: {}/{}", project.getId(), stats.failed(), stats.total());
         }
     }
 

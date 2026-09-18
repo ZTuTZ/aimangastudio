@@ -6,6 +6,7 @@ import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.Asset;
 import com.aimanga.v2.model.Chapter;
 import com.aimanga.v2.model.PageEntity;
+import com.aimanga.v2.model.PipelineStage;
 import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.model.Project;
 import com.aimanga.v2.model.TaskEntity;
@@ -86,7 +87,7 @@ public class ScriptTaskHandler implements TaskHandler {
         stageService.markRunning(project.getId(), PipelineStageService.STAGE_SCRIPT);
 
         // Phase 5.9 并发引擎 + T5.11.6:SCRIPT 使用独立脚本 Worker 池,不再占用生图池
-        stageRunner.run(project.getId(), PipelineStageService.STAGE_SCRIPT, runtime,
+        stageRunner.run(project.getId(), PipelineStageService.STAGE_SCRIPT, StageRunScope.all(), runtime,
                 execution -> processOneChapter(project, execution), stageRunner.scriptEngine());
 
         // 暂停:阶段保持 PAUSED(pauseProject 已置),由恢复/继续重新入队
@@ -95,15 +96,14 @@ public class ScriptTaskHandler implements TaskHandler {
             return;
         }
 
-        // 终态判定(以全量 Item 统计为准:单个失败已在 Runner 内自动重试)
+        // 终态判定(Phase 8.2:按全部 Item 重算)
+        int stageStatus = stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_SCRIPT);
         PipelineStageService.StageItemStats stats = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_SCRIPT);
-        if (stats.failed() == 0) {
-            stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SCRIPT);
+        if (stageStatus == PipelineStage.STATUS_SUCCESS) {
             chainAfterScript(project);
             log.info("[script] 作品 {} SCRIPT 完成: {}/{} 成功", project.getId(), stats.success(), stats.total());
-        } else {
-            stageService.markFailed(project.getId(), PipelineStageService.STAGE_SCRIPT,
-                    stats.failed() + "/" + stats.total() + " 个章节脚本生成失败,重跑 SCRIPT 任务可续作");
+        } else if (stageStatus == PipelineStage.STATUS_FAILED) {
+            log.warn("[script] 作品 {} SCRIPT 存在失败章节: {}/{}", project.getId(), stats.failed(), stats.total());
         }
     }
 

@@ -3,6 +3,7 @@ package com.aimanga.v2.pipeline;
 import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.PageEntity;
 import com.aimanga.v2.model.GenerationRecord;
+import com.aimanga.v2.model.PipelineStage;
 import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.model.Project;
 import com.aimanga.v2.model.TaskEntity;
@@ -50,7 +51,7 @@ public class LayoutTaskHandler implements TaskHandler {
         Long chapterId = parseId(task.getPayload(), "chapterId");
         stageService.markRunning(project.getId(), PipelineStageService.STAGE_LAYOUT);
 
-        syncItems(project, chapterId);
+        syncItems(project, chapterId, pageId == null && chapterId == null);
         if (pageId != null) {
             // 手动单页重布局(T6.5.2):确保 Item 存在(已有布局图的页平时不建 Item)并强制重置
             stageService.createItems(project.getId(), PipelineStageService.STAGE_LAYOUT, BUSINESS_TYPE_PAGE, List.of(pageId));
@@ -66,7 +67,20 @@ public class LayoutTaskHandler implements TaskHandler {
         }
         runtime.begin((int) before.pending());
 
-        stageRunner.run(project.getId(), PipelineStageService.STAGE_LAYOUT, runtime,
+        // Phase 8.2:scoped run —— 单页/按话任务只允许执行目标页的 Item
+        StageRunScope scope;
+        if (pageId != null) {
+            scope = StageRunScope.page(pageId);
+        } else if (chapterId != null) {
+            List<Long> chapterPageIds = ctx.pageMapper.selectList(new LambdaQueryWrapper<PageEntity>()
+                            .eq(PageEntity::getProjectId, project.getId())
+                            .eq(PageEntity::getChapterId, chapterId))
+                    .stream().map(PageEntity::getId).toList();
+            scope = StageRunScope.pages(chapterPageIds);
+        } else {
+            scope = StageRunScope.all();
+        }
+        stageRunner.run(project.getId(), PipelineStageService.STAGE_LAYOUT, scope, runtime,
                 execution -> processOnePage(project, execution, task.getId()), stageRunner.imageEngine());
 
         if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_LAYOUT)) {
@@ -74,14 +88,12 @@ public class LayoutTaskHandler implements TaskHandler {
             return;
         }
 
-        PipelineStageService.StageItemStats stats =
-                stageService.getItemStats(project.getId(), PipelineStageService.STAGE_LAYOUT);
-        if (stats.failed() == 0) {
-            stageService.markSuccess(project.getId(), PipelineStageService.STAGE_LAYOUT);
+        int stageStatus = stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_LAYOUT);
+        PipelineStageService.StageItemStats stats = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_LAYOUT);
+        if (stageStatus == PipelineStage.STATUS_SUCCESS) {
             log.info("[layout] 作品 {} LAYOUT 完成: {}/{}", project.getId(), stats.success(), stats.total());
-        } else {
-            stageService.markFailed(project.getId(), PipelineStageService.STAGE_LAYOUT,
-                    stats.failed() + "/" + stats.total() + " 页布局图生成失败,重跑任务可续作");
+        } else if (stageStatus == PipelineStage.STATUS_FAILED) {
+            log.warn("[layout] 作品 {} LAYOUT 存在失败: {}/{}", project.getId(), stats.failed(), stats.total());
         }
     }
 
@@ -104,15 +116,18 @@ public class LayoutTaskHandler implements TaskHandler {
         return commit.resultRef();
     }
 
-    /** 同步 LAYOUT Items:按目标页建缺的 Item、清理孤儿 Item、失败重排 */
-    private void syncItems(Project project, Long chapterId) {
+    /** 同步 LAYOUT Items:按目标页建缺的 Item、失败重排。
+     *  Phase 8.2 §4.5:孤儿清理仅在项目级全量跑时执行,scoped 任务不得删除其他话的 Item。 */
+    private void syncItems(Project project, Long chapterId, boolean projectWide) {
         List<PageEntity> pages = ctx.pageMapper.selectList(new LambdaQueryWrapper<PageEntity>()
                 .eq(PageEntity::getProjectId, project.getId())
                 .eq(chapterId != null, PageEntity::getChapterId, chapterId)
                 .orderByAsc(PageEntity::getChapterId)
                 .orderByAsc(PageEntity::getPageNo));
-        stageService.removeOrphanItems(project.getId(), PipelineStageService.STAGE_LAYOUT, BUSINESS_TYPE_PAGE,
-                pages.stream().map(PageEntity::getId).toList());
+        if (projectWide) {
+            stageService.removeOrphanItems(project.getId(), PipelineStageService.STAGE_LAYOUT, BUSINESS_TYPE_PAGE,
+                    pages.stream().map(PageEntity::getId).toList());
+        }
         List<Long> needLayout = pages.stream()
                 .filter(p -> p.getLayoutImageUrl() == null || p.getLayoutImageUrl().isBlank())
                 .map(PageEntity::getId)

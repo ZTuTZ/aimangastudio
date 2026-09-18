@@ -83,6 +83,12 @@ public class ConcurrentStageRunner {
     /** 引擎执行结果 */
     public record StageRunResult(int success, int failed, int retried, boolean paused) {}
 
+    /** 无范围重载(项目级全量跑) */
+    public StageRunResult run(Long projectId, String stageType, TaskRuntime runtime,
+                              StageItemProcessor processor, StageEngine engine) {
+        return run(projectId, stageType, StageRunScope.all(), runtime, processor, engine);
+    }
+
     /** stale 提交拒绝计数(Phase 8.1 fencing 观测) */
     public long lastRunStaleRejected() {
         return lastStaleRejected.get();
@@ -90,8 +96,8 @@ public class ConcurrentStageRunner {
 
     private final AtomicLong lastStaleRejected = new AtomicLong();
 
-    public StageRunResult run(Long projectId, String stageType, TaskRuntime runtime, StageItemProcessor processor,
-                              StageEngine engine) {
+    public StageRunResult run(Long projectId, String stageType, StageRunScope scope, TaskRuntime runtime,
+                              StageItemProcessor processor, StageEngine engine) {
         // T5.11.3/T5.11.4:同一 project+stage 同时只允许一个活跃 Runner。
         // leaseTime=-1 → Redisson 看门狗自动续期,进程死亡后锁自动释放,重启恢复可接管。
         RLock stageLock = redissonClient.getLock("aimanga:v2:stage-run:" + projectId + ":" + stageType);
@@ -104,14 +110,14 @@ public class ConcurrentStageRunner {
             throw new BusinessException(409, "该作品「" + stageType + "」阶段已有生成任务在执行中,请等待完成后再发起");
         }
         try {
-            return runLocked(projectId, stageType, runtime, processor, engine);
+            return runLocked(projectId, stageType, scope, runtime, processor, engine);
         } finally {
             stageLock.unlock();
         }
     }
 
     /** 持有阶段执行锁后的主流程 */
-    private StageRunResult runLocked(Long projectId, String stageType, TaskRuntime runtime,
+    private StageRunResult runLocked(Long projectId, String stageType, StageRunScope scope, TaskRuntime runtime,
                                      StageItemProcessor processor, StageEngine engine) {
         // 吸取配置热更新(外部改库/配置中心保存后,下一次执行即生效)
         engine.pool().refresh();
@@ -152,7 +158,7 @@ public class ConcurrentStageRunner {
             int capacity = concurrency - inFlight.get();
             while (capacity > 0) {
                 String attemptToken = java.util.UUID.randomUUID().toString().replace("-", "");
-                PipelineStageItem item = claimNext(projectId, stageType, claimed, attemptToken);
+                PipelineStageItem item = claimNext(projectId, stageType, scope, claimed, attemptToken);
                 if (item == null) {
                     break;
                 }
@@ -199,9 +205,14 @@ public class ConcurrentStageRunner {
         return result;
     }
 
-    /** 原子领取下一个待执行 Item(§5 + Phase 8.1 fencing):领取失败(被抢)自动换下一个候选 */
-    private PipelineStageItem claimNext(Long projectId, String stageType, Set<Long> claimed, String attemptToken) {
-        List<Long> candidates = stageService.getPendingItemIds(projectId, stageType, FEED_BATCH);
+    /** 原子领取下一个待执行 Item(§5 + Phase 8.1 fencing + Phase 8.2 scope):
+     *  领取失败(被抢)自动换下一个候选;有 scope 时只能领取本次 Task 允许的 Item */
+    private PipelineStageItem claimNext(Long projectId, String stageType, StageRunScope scope,
+                                        Set<Long> claimed, String attemptToken) {
+        List<Long> candidates = scope != null && !scope.isUnbounded()
+                ? stageService.getPendingItemIdsInScope(projectId, stageType, scope.businessType(),
+                        scope.businessIds(), FEED_BATCH)
+                : stageService.getPendingItemIds(projectId, stageType, FEED_BATCH);
         for (Long id : candidates) {
             if (!claimed.add(id)) {
                 continue;

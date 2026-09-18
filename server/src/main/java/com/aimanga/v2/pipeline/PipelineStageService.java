@@ -344,6 +344,49 @@ public class PipelineStageService {
         return itemMapper.selectPendingIds(projectId, stageType, limit);
     }
 
+    /** Scope 化候选查询(Phase 8.2):businessIds 为空 = 不限制 */
+    public List<Long> getPendingItemIdsInScope(Long projectId, String stageType, String businessType,
+                                               java.util.Collection<Long> businessIds, int limit) {
+        if (businessIds == null || businessIds.isEmpty()) {
+            return itemMapper.selectPendingIds(projectId, stageType, limit);
+        }
+        return itemMapper.selectPendingIdsInScope(projectId, stageType, businessType, businessIds, limit);
+    }
+
+    /**
+     * 刷新阶段终态(Phase 8.2 §4.8):项目级 Stage 不因某个 scoped Task 成功就直接 SUCCESS。
+     * 规则:存在 PENDING/RUNNING → 未完成(保持/进入 RUNNING,PAUSED 保持);
+     * 全部终态 + failed=0 → SUCCESS;全部终态 + failed>0 → FAILED。返回刷新后的状态。
+     */
+    public int refreshStageTerminalState(Long projectId, String stageType) {
+        StageItemStats stats = getItemStats(projectId, stageType);
+        PipelineStage stage = stageMapper.selectOne(new LambdaQueryWrapper<PipelineStage>()
+                .eq(PipelineStage::getProjectId, projectId)
+                .eq(PipelineStage::getStageType, stageType));
+        if (stage == null) {
+            return -1;
+        }
+        int status;
+        if (stats.pending() > 0) {
+            status = stage.getStatus() != null && stage.getStatus() == PipelineStage.STATUS_PAUSED
+                    ? PipelineStage.STATUS_PAUSED : PipelineStage.STATUS_RUNNING;
+        } else if (stats.failed() > 0) {
+            status = PipelineStage.STATUS_FAILED;
+        } else {
+            status = PipelineStage.STATUS_SUCCESS;
+        }
+        if (stage.getStatus() == null || stage.getStatus() != status) {
+            PipelineStage patch = new PipelineStage();
+            patch.setId(stage.getId());
+            patch.setStatus(status);
+            patch.setProgress(stats.total() == 0 ? 0
+                    : (int) Math.min(100L, stats.success() * 100L / stats.total()));
+            patch.setUpdateTime(java.time.LocalDateTime.now());
+            stageMapper.updateById(patch);
+        }
+        return status;
+    }
+
     /** 标记 Item 进行中 */
     public void markItemRunning(Long itemId) {
         itemMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<PipelineStageItem>()
