@@ -1,6 +1,7 @@
 -- =====================================================================
--- AIMangaStudio v2 数据库 Schema(由 mysqldump 从真实库生成,Phase 8.7)
--- 正式数据库变更以 Flyway 为唯一来源;本文件仅作参考。
+-- AIMangaStudio v2 — V1 Baseline Schema(Phase 8.7 Flyway)
+-- 正式数据库变更以 Flyway 为唯一来源。
+-- CI 验证:空 MySQL → 应用启动 → 自动得到完整 Schema。
 -- =====================================================================
 
 -- MySQL dump 10.13  Distrib 8.4.11, for macos26.6 (arm64)
