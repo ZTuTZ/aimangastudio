@@ -78,11 +78,6 @@ public class SheetTaskHandler implements TaskHandler {
         stageRunner.run(project.getId(), PipelineStageService.STAGE_SHEET, scope, runtime,
                 execution -> generateSheet(project, execution), stageRunner.imageEngine());
 
-        // 暂停:阶段保持 PAUSED(pauseProject 已置),由恢复/继续重新入队
-        if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_SHEET)) {
-            log.info("[sheet] 作品 {} SHEET 暂停中,等待继续", project.getId());
-            return;
-        }
 
         // 终态判定(Phase 8.2:项目级 Stage 不因局部成功就 SUCCESS,按全部 Item 重算)
         int stageStatus = stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_SHEET);

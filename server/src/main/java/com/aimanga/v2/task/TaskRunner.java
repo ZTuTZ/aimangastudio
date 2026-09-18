@@ -83,6 +83,9 @@ public class TaskRunner {
         } catch (TaskStopSignal s) {
             log.info("[task] 任务被用户停止 taskId={}", taskId);
             finish(running, claimToken, runtime, TaskStatus.STOPPED, "已停止");
+        } catch (TaskPauseSignal p) {
+            // Phase 8.3:暂停 → Task=PAUSED,保留 payload/progress/counts,同一 Task 可继续
+            pause(running, claimToken, runtime);
         } catch (BusinessException e) {
             log.warn("[task] 任务失败 taskId={}: {}", taskId, e.getMessage(), e);
             finish(running, claimToken, runtime, TaskStatus.FAILED, e.getMessage());
@@ -92,6 +95,21 @@ public class TaskRunner {
         } finally {
             heartbeat.cancel(false);
         }
+    }
+
+    /** 暂停写入(Phase 8.3):RUNNING → PAUSED,带执行锁校验;保留 payload/进度/计数,清 claim/heartbeat */
+    private void pause(TaskEntity task, String claimToken, TaskRuntime runtime) {
+        int updated = taskMapper.pauseTask(task.getId(), claimToken);
+        if (updated == 0) {
+            log.warn("[task] 暂停写入被跳过(执行锁已失效) taskId={}", task.getId());
+            return;
+        }
+        TaskEntity latest = taskMapper.selectById(task.getId());
+        if (latest != null) {
+            publisher.publishStatus(latest, TaskStatus.PAUSED, "已暂停(进行中的请求已保存)");
+        }
+        log.info("[task] 任务已暂停 taskId={} progress={} success={}/{}",
+                task.getId(), runtime.progress(), runtime.successCount(), runtime.total());
     }
 
     /** 终态写入:带执行锁校验 —— 若看门狗已判定僵尸并重新入队,本次写入自动作废 */

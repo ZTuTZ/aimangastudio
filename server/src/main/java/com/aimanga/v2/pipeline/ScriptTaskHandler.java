@@ -90,11 +90,6 @@ public class ScriptTaskHandler implements TaskHandler {
         stageRunner.run(project.getId(), PipelineStageService.STAGE_SCRIPT, StageRunScope.all(), runtime,
                 execution -> processOneChapter(project, execution), stageRunner.scriptEngine());
 
-        // 暂停:阶段保持 PAUSED(pauseProject 已置),由恢复/继续重新入队
-        if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_SCRIPT)) {
-            log.info("[script] 作品 {} SCRIPT 暂停中,等待继续", project.getId());
-            return;
-        }
 
         // 终态判定(Phase 8.2:按全部 Item 重算)
         int stageStatus = stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_SCRIPT);

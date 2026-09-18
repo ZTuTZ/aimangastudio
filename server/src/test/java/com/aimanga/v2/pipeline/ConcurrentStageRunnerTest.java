@@ -4,6 +4,7 @@ import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.service.ConfigService;
 import com.aimanga.v2.task.TaskRuntime;
+import com.aimanga.v2.task.TaskPauseSignal;
 import com.aimanga.v2.task.TaskStopSignal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -155,12 +156,12 @@ class ConcurrentStageRunnerTest {
     }
 
     @Test
-    void stagePaused_claimsNothing() {
+    void stagePaused_throwsPauseSignal_claimsNothing() {
+        // Phase 8.3:阶段暂停 → Runner 抛 TaskPauseSignal,Task 置 PAUSED(同一 Task 继续复用)
         when(stageService.isStagePaused(PROJECT_ID, STAGE)).thenReturn(true);
 
-        ConcurrentStageRunner.StageRunResult result = runner.run(PROJECT_ID, STAGE, StageRunScope.all(), runtime, it -> "{}", runner.imageEngine());
-
-        assertThat(result.paused()).isTrue();
+        assertThatThrownBy(() -> runner.run(PROJECT_ID, STAGE, StageRunScope.all(), runtime, it -> "{}", runner.imageEngine()))
+                .isInstanceOf(TaskPauseSignal.class);
         verify(stageService, never()).getPendingItemIds(anyLong(), anyString(), anyInt());
         verify(stageService, never()).claimItem(anyLong(), anyString());
     }

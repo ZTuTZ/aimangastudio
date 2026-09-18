@@ -72,9 +72,6 @@ public abstract class PostProcessTaskHandler implements TaskHandler {
                     return commit.resultRef();
                 }, stageRunner.imageEngine());
 
-        if (stageService.isStagePaused(project.getId(), stageType)) {
-            return;
-        }
         PipelineStageService.StageItemStats stats = stageService.getItemStats(project.getId(), stageType);
         if (stats.failed() == 0) {
             stageService.markSuccess(project.getId(), stageType);

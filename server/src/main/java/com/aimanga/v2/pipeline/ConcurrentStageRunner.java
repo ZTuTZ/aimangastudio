@@ -81,7 +81,7 @@ public class ConcurrentStageRunner {
     }
 
     /** 引擎执行结果 */
-    public record StageRunResult(int success, int failed, int retried, boolean paused) {}
+    public record StageRunResult(int success, int failed, int retried) {}
 
     /** 无范围重载(项目级全量跑) */
     public StageRunResult run(Long projectId, String stageType, TaskRuntime runtime,
@@ -196,12 +196,16 @@ public class ConcurrentStageRunner {
         if (stopped.get()) {
             throw new TaskStopSignal();
         }
-        StageRunResult result = new StageRunResult(success.get(), failed.get(), retried.get(), paused.get());
+        if (paused.get()) {
+            // Phase 8.3:暂停 → 抛 TaskPauseSignal,TaskRunner 将 Task 置 PAUSED(同一 Task 原样继续)
+            throw new com.aimanga.v2.task.TaskPauseSignal();
+        }
+        StageRunResult result = new StageRunResult(success.get(), failed.get(), retried.get());
         if (staleRejected.get() > 0) {
             log.warn("[stage] {} {} stale_commit_rejected 共 {} 次(fencing 生效)", projectId, stageType, staleRejected.get());
         }
-        log.info("[stage] {} {} 并发执行结束: 成功={} 失败={} 重试={} 暂停={}",
-                projectId, stageType, result.success(), result.failed(), result.retried(), result.paused());
+        log.info("[stage] {} {} 并发执行结束: 成功={} 失败={} 重试={}",
+                projectId, stageType, result.success(), result.failed(), result.retried());
         return result;
     }
 

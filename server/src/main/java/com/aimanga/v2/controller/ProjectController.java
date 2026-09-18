@@ -10,13 +10,17 @@ import com.aimanga.v2.dto.TaskVO;
 import com.aimanga.v2.dto.UpdateProjectRequest;
 import com.aimanga.v2.model.PipelineStage;
 import com.aimanga.v2.model.Project;
+import com.aimanga.v2.model.TaskEntity;
+import com.aimanga.v2.task.TaskStatus;
 import com.aimanga.v2.pipeline.GenerationPreflightService;
 import com.aimanga.v2.pipeline.PageAssetBindingService;
 import com.aimanga.v2.pipeline.PipelineStageService;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.aimanga.v2.service.ImportService;
 import com.aimanga.v2.service.ProjectService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -30,6 +34,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/projects")
 @RequiredArgsConstructor
@@ -112,26 +117,29 @@ public class ProjectController {
     }
 
     /**
-     * 继续项目(T5.11.5):恢复所有 PAUSED 阶段并逐阶段确保任务在跑。
-     * 主准备流水线(SPLIT/ASSET/SCRIPT)按顺序;手动素材阶段(SHEET/REFERENCE)独立恢复,
-     * 不能只靠 firstIncompleteStage 启动一个阶段(否则暂停的素材阶段会被遗漏)。
+     * 继续项目(Phase 8.3 §5.5):恢复所有 PAUSED 阶段 + 恢复项目下 PAUSED 的原 Task。
+     * 原 Task 携带原 payload(scope/colorMode/forceImage 等)原样继续,Task ID 不变;
+     * 不再根据 Stage 创建空 payload 新 Task。
      */
     @PostMapping("/{id}/resume")
-    public Result<Void> resume(@PathVariable Long id) {
+    public Result<Integer> resume(@PathVariable Long id) {
         projectService.requireAccessible(id);
-        List<String> pausedStages = stageService.pausedStageTypes(id);
         stageService.resumeProject(id);
-        for (String stage : pausedStages) {
-            // 阶段类型 → 任务类型映射(REFERENCE→ASSET_REF;IMAGE 阶段随 BATCH 任务恢复,幂等跳过已完成页)
-            String taskType = switch (stage) {
-                case "REFERENCE" -> "ASSET_REF";
-                case "IMAGE" -> "BATCH";
-                default -> stage;
-            };
-            // enqueueUnique:已有活跃任务时静默跳过,不会产生第二个并行 Runner
-            taskService.enqueueUnique(id, null, taskType, "{}");
+        // 恢复项目下所有 PAUSED 任务(原 Task 原继续)
+        List<TaskEntity> pausedTasks = taskService.list(new LambdaQueryWrapper<TaskEntity>()
+                .eq(TaskEntity::getProjectId, id)
+                .eq(TaskEntity::getStatus, TaskStatus.PAUSED)
+                .orderByAsc(TaskEntity::getId));
+        int resumed = 0;
+        for (TaskEntity task : pausedTasks) {
+            try {
+                taskService.resume(task.getId());
+                resumed++;
+            } catch (BusinessException e) {
+                log.warn("[project] 恢复任务 {} 失败: {}", task.getId(), e.getMessage());
+            }
         }
-        return Result.ok();
+        return Result.ok(resumed);
     }
 
     /** 查询流水线各阶段进度 */

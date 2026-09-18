@@ -137,10 +137,6 @@ public class BatchTaskHandler implements TaskHandler {
                         }
                         return commit.resultRef();
                     }, stageRunner.imageEngine());
-            if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_LAYOUT)) {
-                log.info("[batch] 作品 {} LAYOUT 暂停,等待继续", project.getId());
-                return;
-            }
         }
 
         // ===== 阶段二:IMAGE(成品页并发) =====
@@ -167,10 +163,6 @@ public class BatchTaskHandler implements TaskHandler {
                     }
                     return commit.resultRef();
                 }, stageRunner.imageEngine());
-        if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_IMAGE)) {
-            log.info("[batch] 作品 {} IMAGE 暂停,等待继续", project.getId());
-            return;
-        }
 
         // ===== 汇总(T6.3.7 + Phase 8.2:整部重算项目状态,修复 P0-3) =====
         summarize(project, pagesAfterLayout, "PROJECT".equals(scope), directOutput);

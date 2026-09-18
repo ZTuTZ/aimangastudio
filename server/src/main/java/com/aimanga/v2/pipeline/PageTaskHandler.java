@@ -82,9 +82,6 @@ public class PageTaskHandler implements TaskHandler {
                     return commit.resultRef();
                 }, stageRunner.imageEngine());
 
-        if (stageService.isStagePaused(project.getId(), PipelineStageService.STAGE_IMAGE)) {
-            return;
-        }
         PipelineStageService.StageItemStats stats =
                 stageService.getItemStats(project.getId(), PipelineStageService.STAGE_IMAGE);
         if (stats.failed() == 0) {

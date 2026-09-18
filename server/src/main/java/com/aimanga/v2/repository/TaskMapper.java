@@ -58,6 +58,16 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
               AND (#{projectId} IS NULL OR t.project_id = #{projectId})
               AND (#{keyword} IS NULL OR p.title LIKE CONCAT('%', #{keyword}, '%'))
             """)
+    /** 暂停任务(Phase 8.3):RUNNING → PAUSED,保留 payload/进度/计数,清执行锁与心跳 */
+    @Update("UPDATE task SET status = 7, claim_token = NULL, heartbeat_time = NULL " +
+            "WHERE id = #{id} AND claim_token = #{claimToken} AND status = 1")
+    int pauseTask(@Param("id") Long id, @Param("claimToken") String claimToken);
+
+    /** 恢复暂停任务(Phase 8.3):PAUSED → PENDING,payload/进度/计数原样保留 */
+    @Update("UPDATE task SET status = 0, error = '', claim_token = NULL, heartbeat_time = NULL " +
+            "WHERE id = #{id} AND status = 7")
+    int resumeTask(@Param("id") Long id);
+
     long countFiltered(@Param("userId") Long userId,
                        @Param("status") Integer status,
                        @Param("type") String type,

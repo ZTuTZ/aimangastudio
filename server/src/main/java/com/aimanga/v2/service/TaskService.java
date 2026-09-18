@@ -158,6 +158,23 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         return latest;
     }
 
+    /** 恢复暂停任务(Phase 8.3 §5.4):PAUSED → PENDING,payload/进度/计数原样保留 —— 同一 Task 继续 */
+    public TaskEntity resume(Long taskId) {
+        TaskEntity task = requireAccessible(taskId);
+        if (!TaskStatus.resumable(task.getStatus() == null ? TaskStatus.PENDING : task.getStatus())) {
+            throw new BusinessException(409, "任务未处于暂停状态");
+        }
+        int updated = baseMapper.resumeTask(taskId);
+        if (updated == 0) {
+            throw new BusinessException(409, "任务状态已变化,请刷新后重试");
+        }
+        taskQueue.enqueue(taskId);
+        TaskEntity latest = getById(taskId);
+        publisher.publishStatus(latest, TaskStatus.PENDING, "已恢复(同一任务继续)");
+        log.info("[task] 暂停任务已恢复 taskId={}", taskId);
+        return latest;
+    }
+
     public void delete(Long taskId) {
         TaskEntity task = requireAccessible(taskId);
         int status = task.getStatus() == null ? TaskStatus.PENDING : task.getStatus();
