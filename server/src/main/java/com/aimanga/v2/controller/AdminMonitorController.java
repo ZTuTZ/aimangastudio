@@ -5,10 +5,12 @@ import com.aimanga.v2.model.PipelineStage;
 import com.aimanga.v2.model.Project;
 import com.aimanga.v2.model.TaskEntity;
 import com.aimanga.v2.pipeline.PipelineStageService;
+import com.aimanga.v2.pipeline.StageItemCommitService;
 import com.aimanga.v2.repository.PipelineStageMapper;
 import com.aimanga.v2.repository.ProjectMapper;
 import com.aimanga.v2.service.TaskService;
 import com.aimanga.v2.task.RedisConcurrencyLimiter;
+import com.aimanga.v2.repository.TaskMapper;
 import com.aimanga.v2.task.TaskQueue;
 import com.aimanga.v2.task.TaskStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -40,15 +42,23 @@ public class AdminMonitorController {
     private final com.aimanga.v2.service.ConfigService configService;
     private final ProjectMapper projectMapper;
     private final PipelineStageMapper stageMapper;
+    private final TaskMapper taskMapper;
+    private final StageItemCommitService commitService;
 
     @GetMapping("/overview")
     public Result<Map<String, Object>> overview() {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("runningTasks", taskService.countByStatus(TaskStatus.RUNNING));
         data.put("pendingTasks", taskService.countByStatus(TaskStatus.PENDING));
+        data.put("pausedTasks", taskService.countByStatus(TaskStatus.PAUSED));
+        data.put("stoppingTasks", taskService.countByStatus(TaskStatus.STOPPING));
         data.put("queueLength", taskQueue.size());
         data.put("maxConcurrency", configService.getInt("task_max_concurrency", 5));
         data.put("imageConcurrency", configService.getInt("image_generation_concurrency", 5));
+        // Phase 8.10:stale_running(租约/心跳超时的进行中任务)
+        data.put("staleRunningTasks", taskMapper.selectLeaseOrExecutionTimeout().size());
+        // Phase 8.1:fencing 生效观测
+        data.put("staleCommitRejected", commitService.staleRejectedCount());
         List<Map<String, Object>> channels = new ArrayList<>();
         concurrencyLimiter.aiOccupancy().forEach((k, v) -> {
             Map<String, Object> c = new LinkedHashMap<>();
