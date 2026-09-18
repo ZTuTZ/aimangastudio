@@ -8,7 +8,7 @@ import com.aimanga.v2.pipeline.PipelineStageService;
 import com.aimanga.v2.repository.PipelineStageMapper;
 import com.aimanga.v2.repository.ProjectMapper;
 import com.aimanga.v2.service.TaskService;
-import com.aimanga.v2.task.RedisSemaphores;
+import com.aimanga.v2.task.RedisConcurrencyLimiter;
 import com.aimanga.v2.task.TaskQueue;
 import com.aimanga.v2.task.TaskStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -36,7 +36,7 @@ public class AdminMonitorController {
 
     private final TaskService taskService;
     private final TaskQueue taskQueue;
-    private final RedisSemaphores redisSemaphores;
+    private final RedisConcurrencyLimiter concurrencyLimiter;
     private final com.aimanga.v2.service.ConfigService configService;
     private final ProjectMapper projectMapper;
     private final PipelineStageMapper stageMapper;
@@ -50,7 +50,7 @@ public class AdminMonitorController {
         data.put("maxConcurrency", configService.getInt("task_max_concurrency", 5));
         data.put("imageConcurrency", configService.getInt("image_generation_concurrency", 5));
         List<Map<String, Object>> channels = new ArrayList<>();
-        redisSemaphores.aiOccupancy().forEach((k, v) -> {
+        concurrencyLimiter.aiOccupancy().forEach((k, v) -> {
             Map<String, Object> c = new LinkedHashMap<>();
             c.put("channel", k);
             c.put("used", v[0]);

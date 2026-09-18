@@ -26,12 +26,9 @@ public class TaskRecovery implements ApplicationRunner {
 
     private final TaskMapper taskMapper;
     private final TaskQueue taskQueue;
-    private final com.aimanga.v2.task.RedisSemaphores semaphores;
 
     @Override
     public void run(ApplicationArguments args) {
-        // 信号量重置(临时保留;Phase 8.6 Limiter 上线后移除 —— 多实例不能清他实例限制状态)
-        semaphores.resetAll();
         // 3. 仅补齐 PENDING 的入队(marker 去重;RUNNING/STOPPING/PAUSED 一律不动)
         List<TaskEntity> pending = taskMapper.selectList(new LambdaQueryWrapper<TaskEntity>()
                 .eq(TaskEntity::getStatus, TaskStatus.PENDING)

@@ -3,7 +3,7 @@ package com.aimanga.v2.ai;
 import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.service.ConfigService;
 import com.aimanga.v2.storage.StorageService;
-import com.aimanga.v2.task.RedisSemaphores;
+import com.aimanga.v2.task.RedisConcurrencyLimiter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,15 +30,15 @@ public class AiService {
     private final AiClient aiClient;
     private final StorageService storageService;
     private final ObjectMapper objectMapper;
-    private final RedisSemaphores semaphores;
+    private final RedisConcurrencyLimiter limiter;
 
     /** 文本对话 */
     public String chat(String channel, String prompt, List<String> images) {
-        acquire(channel);
+        String permit = acquire(channel);
         try {
             return aiClient.chatText(cfg(channel), prompt, images == null ? List.of() : images);
         } finally {
-            semaphores.releaseAi(channel);
+            limiter.releaseAi(channel, permit);
         }
     }
 
@@ -64,7 +64,7 @@ public class AiService {
         ChatConfig cfg = cfg(channel);
         BusinessException last = null;
         for (int attempt = 0; attempt < 2; attempt++) {
-            acquire(channel);
+            String permit = acquire(channel);
             try {
                 boolean gemini = cfg.model() != null && cfg.model().toLowerCase().contains("gemini");
                 log.info("[ai] 生图 channel={} model={} aspect={} 走Gemini={} 参考图={}",
@@ -77,17 +77,19 @@ public class AiService {
                 last = e;
                 log.warn("[ai] 生图第 {} 次失败: {}", attempt + 1, e.getMessage());
             } finally {
-                semaphores.releaseAi(channel);
+                limiter.releaseAi(channel, permit);
             }
         }
         throw last;
     }
 
-    /** AI 通道限流获取:最多等待 60s(流水线并发受控),超时视为通道饱和 */
-    private void acquire(String channel) {
-        if (!semaphores.acquireAi(channel)) {
+    /** AI 通道限流获取(Phase 8.6 ZSET limiter):最多等待 60s,超时视为通道饱和;返回许可 token */
+    private String acquire(String channel) {
+        String permit = limiter.acquireAi(channel);
+        if (permit == null) {
             throw new BusinessException(429, "AI 通道 " + channel + " 并发已满,请稍后重试");
         }
+        return permit;
     }
 
     /** 原始引用(http URL / data:base64)→ OSS 可访问 URL */

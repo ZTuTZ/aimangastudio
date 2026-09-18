@@ -30,7 +30,7 @@ public class TaskWorkerPool {
     private final TaskQueue taskQueue;
     private final TaskMapper taskMapper;
     private final TaskRunner taskRunner;
-    private final RedisSemaphores semaphores;
+    private final RedisConcurrencyLimiter concurrencyLimiter;
     private final com.aimanga.v2.service.ConfigService configService;
 
     private final List<WorkerHandle> workers = new ArrayList<>();
@@ -43,11 +43,12 @@ public class TaskWorkerPool {
     }
 
     public TaskWorkerPool(TaskQueue taskQueue, TaskMapper taskMapper, TaskRunner taskRunner,
-                          RedisSemaphores semaphores, com.aimanga.v2.service.ConfigService configService) {
+                          RedisConcurrencyLimiter concurrencyLimiter,
+                          com.aimanga.v2.service.ConfigService configService) {
         this.taskQueue = taskQueue;
         this.taskMapper = taskMapper;
         this.taskRunner = taskRunner;
-        this.semaphores = semaphores;
+        this.concurrencyLimiter = concurrencyLimiter;
         this.configService = configService;
     }
 
@@ -159,14 +160,16 @@ public class TaskWorkerPool {
         if (!TaskStatus.active(task.getStatus() == null ? TaskStatus.PENDING : task.getStatus())) {
             return; // 已被停止/已完成,跳过
         }
-        if (!semaphores.tryAcquireUser(task.getUserId())) {
+        // Phase 8.6:ZSET limiter 许可 token(实例崩溃自动过期,无需启动重置)
+        String permit = concurrencyLimiter.tryAcquireUser(task.getUserId());
+        if (permit == null) {
             taskQueue.enqueueDelayed(taskId, 2000);
             return;
         }
         try {
             taskRunner.run(taskId);
         } finally {
-            semaphores.releaseUser(task.getUserId());
+            concurrencyLimiter.releaseUser(task.getUserId(), permit);
         }
     }
 }
