@@ -6,6 +6,7 @@ import com.aimanga.v2.repository.TaskMapper;
 import lombok.RequiredArgsConstructor;
 
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Objects;
 
 /**
  * 任务运行时:向处理器暴露进度汇报与停止感知。
@@ -69,6 +70,9 @@ public class TaskRuntime {
     public void checkStop() {
         TaskEntity latest = taskMapper.selectById(task.getId());
         if (latest == null) {
+            throw new TaskStopSignal();
+        }
+        if (!Objects.equals(task.getClaimToken(), latest.getClaimToken())) {
             throw new TaskStopSignal();
         }
         int status = latest.getStatus() == null ? TaskStatus.PENDING : latest.getStatus();

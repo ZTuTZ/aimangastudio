@@ -10,6 +10,7 @@ import org.mockito.ArgumentCaptor;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -151,5 +152,22 @@ class TaskRunnerTest {
 
         verify(mapper, never()).updateById(any(TaskEntity.class));
         verify(mapper, atLeastOnce()).updateProgress(eq(1L), anyString(), eq(1), eq(0), eq(0), eq(0), eq(0));
+    }
+
+    @Test
+    void runtimeStopsWhenItsClaimTokenHasBeenReplaced() {
+        TaskEntity owned = new TaskEntity();
+        owned.setId(1L);
+        owned.setClaimToken("worker-a");
+        TaskEntity replacement = new TaskEntity();
+        replacement.setId(1L);
+        replacement.setStatus(TaskStatus.RUNNING);
+        replacement.setClaimToken("worker-b");
+        when(mapper.selectById(1L)).thenReturn(replacement);
+
+        TaskRuntime runtime = new TaskRuntime(mapper, publisher, owned);
+
+        assertThatThrownBy(runtime::checkStop)
+                .isInstanceOf(TaskStopSignal.class);
     }
 }

@@ -20,6 +20,9 @@ export interface TaskVO {
   createTime: string;
   startTime: string | null;
   endTime: string | null;
+  retryCount: number;
+  maxRetryCount: number;
+  lastError: string | null;
   projectTitle: string | null;
 }
 

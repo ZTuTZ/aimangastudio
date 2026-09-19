@@ -156,8 +156,8 @@ export function TaskMonitor() {
             { title: '类型', dataIndex: 'taskType', width: 100, render: (t) => <Tag bordered={false}>{TASK_TYPE_LABELS[t] ?? t}</Tag> },
             { title: '状态', dataIndex: 'status', width: 90, render: (s) => <Tag color={TASK_STATUS[s]?.color} bordered={false}>{TASK_STATUS[s]?.label ?? s}</Tag> },
             { title: '进度', width: 150, render: (_, t) => `${t.progress}% (${t.successCount}/${t.totalCount})` },
-            { title: '重试', dataIndex: 'retryCount', width: 60 },
-            { title: '最后错误', dataIndex: 'lastError', ellipsis: true, render: (e) => e ? <Typography.Text type="danger" className="text-xs">{e}</Typography.Text> : '-' },
+            { title: '重试', width: 60, render: (_, task) => task.retryCount },
+            { title: '最后错误', ellipsis: true, render: (_, task) => task.lastError ? <Typography.Text type="danger" className="text-xs">{task.lastError}</Typography.Text> : '-' },
             {
               title: '操作', width: 140,
               render: (_, t) => [0, 1, 6].includes(t.status)

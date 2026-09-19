@@ -276,10 +276,11 @@ public class PipelineStageService {
                 .in(PipelineStageItem::getBusinessId, businessIds)
                 .eq(PipelineStageItem::getStatus, PipelineStageItem.STATUS_SUCCESS)
                 .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING)
-                .set(PipelineStageItem::getResultRef, "")
+                .set(PipelineStageItem::getResultRef, null)
                 .set(PipelineStageItem::getErrorMessage, "")
                 .set(PipelineStageItem::getAttemptToken, null)
-                .set(PipelineStageItem::getClaimedAt, null));
+                .set(PipelineStageItem::getClaimedAt, null)
+                .set(PipelineStageItem::getFinishTime, null));
     }
 
     /** 精准重置:手动重生成指定业务单元时,把对应 Item 重置为排队(不影响其他失败单元) */
@@ -384,11 +385,18 @@ public class PipelineStageService {
         return itemMapper.selectPendingIds(projectId, stageType, limit);
     }
 
-    /** Scope 化候选查询(Phase 8.2):businessIds 为空 = 不限制 */
+    /**
+     * Scope 化候选查询。
+     * 全量调用必须使用 getPendingItemIds；此入口的空集合表示显式空范围，
+     * 不能退化为全项目查询。
+     */
     public List<Long> getPendingItemIdsInScope(Long projectId, String stageType, String businessType,
                                                java.util.Collection<Long> businessIds, int limit) {
-        if (businessIds == null || businessIds.isEmpty()) {
-            return itemMapper.selectPendingIds(projectId, stageType, limit);
+        if (businessIds == null) {
+            throw new IllegalArgumentException("scoped businessIds must not be null");
+        }
+        if (businessIds.isEmpty()) {
+            return List.of();
         }
         return itemMapper.selectPendingIdsInScope(projectId, stageType, businessType, businessIds, limit);
     }
