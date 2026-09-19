@@ -1,7 +1,10 @@
 package com.aimanga.v2.pipeline;
 
 import com.aimanga.v2.model.PipelineStageItem;
+import com.aimanga.v2.model.TaskEntity;
 import com.aimanga.v2.repository.PipelineStageItemMapper;
+import com.aimanga.v2.repository.TaskMapper;
+import com.aimanga.v2.task.TaskExecutionOwner;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -27,24 +30,32 @@ import static org.mockito.Mockito.when;
 class StaleCommitFencingFailureInjectionTest {
 
     private PipelineStageItemMapper itemMapper;
+    private TaskMapper taskMapper;
     private StageItemCommitService service;
     private PipelineStageItem lockedRow;
 
     @BeforeEach
     void setUp() {
         itemMapper = mock(PipelineStageItemMapper.class);
-        service = new StageItemCommitService(itemMapper);
+        taskMapper = mock(TaskMapper.class);
+        service = new StageItemCommitService(itemMapper, taskMapper);
         lockedRow = new PipelineStageItem();
         lockedRow.setId(9001L);
         lockedRow.setStatus(PipelineStageItem.STATUS_RUNNING);
         lockedRow.setAttemptToken("TOKEN_B"); // Attempt B(最新)持有
+        lockedRow.setOwnerTaskId(77L);
+        lockedRow.setOwnerTaskClaimToken("TASK_CLAIM_B");
         when(itemMapper.lockById(9001L)).thenReturn(lockedRow);
+        TaskEntity owner = new TaskEntity();
+        owner.setId(77L);
+        owner.setClaimToken("TASK_CLAIM_B");
+        when(taskMapper.lockActiveClaim(77L, "TASK_CLAIM_B")).thenReturn(owner);
     }
 
     private StageItemExecution exec(String token) {
         PipelineStageItem item = new PipelineStageItem();
         item.setId(9001L);
-        return new StageItemExecution(item, token);
+        return new StageItemExecution(item, token, new TaskExecutionOwner(77L, "TASK_CLAIM_B"));
     }
 
     @Test

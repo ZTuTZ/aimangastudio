@@ -148,21 +148,33 @@ public class BatchTaskHandler implements TaskHandler {
                 execution -> {
                     PipelineStageItem item = execution.item();
                     PageEntity page = pageOf(item.getBusinessId());
-                    PageGenerationService.PageGenResult result = pageGenerationService.processPage(
-                            project, page, colorMode, PipelineStageService.isForceRequested(item));
-                    var commit = commitService.commitFenced(execution, () -> {
-                        String ref = pageGenerationService.applyPageImageResult(
-                                page.getId(), page.getScriptVersion(), result, page.getGenerateRecords());
-                        generationRecordService.record(project.getId(), page.getChapterId(), page.getId(), task.getId(),
-                                GenerationRecord.KIND_PAGE, ctx.configService.getString("ai_image_model"),
-                                result.prompt(), result.images(), result.inputUrl(), result.url(),
-                                GenerationRecord.STATUS_SUCCESS, null);
-                        return ref;
-                    });
-                    if (!commit.committed()) {
+                    if (!commitService.runWhileOwned(execution, () -> pageGenerationService.markPageRunning(page.getId()))) {
                         throw new StaleCommitRejectedException(item.getId());
                     }
-                    return commit.resultRef();
+                    try {
+                        PageGenerationService.PageGenResult result = pageGenerationService.processPage(
+                                project, page, colorMode, PipelineStageService.isForceRequested(item));
+                        var commit = commitService.commitFenced(execution, () -> {
+                            String ref = pageGenerationService.applyPageImageResult(
+                                    page.getId(), page.getScriptVersion(), result, page.getGenerateRecords());
+                            generationRecordService.record(project.getId(), page.getChapterId(), page.getId(), task.getId(),
+                                    GenerationRecord.KIND_PAGE, ctx.configService.getString("ai_image_model"),
+                                    result.prompt(), result.images(), result.inputUrl(), result.url(),
+                                    GenerationRecord.STATUS_SUCCESS, null);
+                            return ref;
+                        });
+                        if (!commit.committed()) {
+                            throw new StaleCommitRejectedException(item.getId());
+                        }
+                        return commit.resultRef();
+                    } catch (StaleCommitRejectedException e) {
+                        throw e;
+                    } catch (RuntimeException e) {
+                        String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                        commitService.runWhileOwned(execution,
+                                () -> pageGenerationService.markPageFailed(page.getId(), page.getGenerateRecords(), colorMode, reason));
+                        throw e;
+                    }
                 }, stageRunner.imageEngine());
 
         // ===== 汇总(T6.3.7 + Phase 8.2:整部重算项目状态,修复 P0-3) =====

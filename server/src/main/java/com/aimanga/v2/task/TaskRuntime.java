@@ -23,6 +23,7 @@ public class TaskRuntime {
     private final AtomicInteger fail = new AtomicInteger();
     private volatile int total;
     private volatile int progress;
+    private volatile boolean ownershipLost;
 
     /** 声明总步数(重置计数,用于重试) */
     public void begin(int total) {
@@ -48,6 +49,16 @@ public class TaskRuntime {
         return progress;
     }
 
+    /** 当前运行 Task 的 fencing 所有者，供其领取的 Stage Item 绑定。 */
+    public TaskExecutionOwner owner() {
+        return new TaskExecutionOwner(task.getId(), task.getClaimToken());
+    }
+
+    /** 心跳无法再确认租约时由 TaskRunner 标记；后续不再发起新的业务请求。 */
+    public void markOwnershipLost() {
+        ownershipLost = true;
+    }
+
     public void stepSuccess() {
         success.incrementAndGet();
         recalcAndPersist();
@@ -68,11 +79,17 @@ public class TaskRuntime {
      * 每步前调用:用户已请求停止(或任务已被置为停止)时抛出 TaskStopSignal 中断处理器。
      */
     public void checkStop() {
+        if (ownershipLost) {
+            throw new TaskStopSignal();
+        }
         TaskEntity latest = taskMapper.selectById(task.getId());
         if (latest == null) {
             throw new TaskStopSignal();
         }
         if (!Objects.equals(task.getClaimToken(), latest.getClaimToken())) {
+            throw new TaskStopSignal();
+        }
+        if (latest.getLeaseUntil() != null && latest.getLeaseUntil().isBefore(java.time.LocalDateTime.now())) {
             throw new TaskStopSignal();
         }
         int status = latest.getStatus() == null ? TaskStatus.PENDING : latest.getStatus();

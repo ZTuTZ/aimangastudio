@@ -2,6 +2,7 @@ package com.aimanga.v2.pipeline;
 
 import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.repository.PipelineStageItemMapper;
+import com.aimanga.v2.repository.TaskMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -26,11 +27,16 @@ import java.util.function.Supplier;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class StageItemCommitService {
 
     private final PipelineStageItemMapper itemMapper;
+    private final TaskMapper taskMapper;
     private final AtomicLong staleRejected = new AtomicLong();
+
+    public StageItemCommitService(PipelineStageItemMapper itemMapper, TaskMapper taskMapper) {
+        this.itemMapper = itemMapper;
+        this.taskMapper = taskMapper;
+    }
 
     /** 供监控读取(Phase 8.10) */
     public long staleRejectedCount() {
@@ -46,14 +52,11 @@ public class StageItemCommitService {
      */
     @Transactional
     public CommitResult commitFenced(StageItemExecution execution, Supplier<String> businessWrites) {
+        if (!ownsCurrentTask(execution)) {
+            return new CommitResult(false, null);
+        }
         PipelineStageItem locked = itemMapper.lockById(execution.item().getId());
-        if (locked == null
-                || locked.getStatus() == null
-                || locked.getStatus() != PipelineStageItem.STATUS_RUNNING
-                || !java.util.Objects.equals(locked.getAttemptToken(), execution.attemptToken())) {
-            staleRejected.incrementAndGet();
-            log.warn("[fence] stale_commit_rejected item={} attempt={} (已被更新的 Attempt 接管)",
-                    execution.item().getId(), execution.attemptToken());
+        if (!ownsCurrentItem(execution, locked)) {
             return new CommitResult(false, null);
         }
         // 注意:Supplier 只允许执行一次(业务写入有副作用,双写即事故)
@@ -65,8 +68,53 @@ public class StageItemCommitService {
         locked.setResultRef(resultRef);
         locked.setFinishTime(java.time.LocalDateTime.now());
         locked.setAttemptToken(null);
+        locked.setOwnerTaskId(null);
+        locked.setOwnerTaskClaimToken(null);
         locked.setUpdateTime(java.time.LocalDateTime.now());
         itemMapper.updateById(locked);
         return new CommitResult(true, resultRef);
+    }
+
+    /** 对 RUNNING/FAILED 等临时业务状态也执行双层 fencing，但不改变 Item 终态。 */
+    @Transactional
+    public boolean runWhileOwned(StageItemExecution execution, Runnable businessWrites) {
+        if (!ownsCurrentTask(execution)) {
+            return false;
+        }
+        PipelineStageItem locked = itemMapper.lockById(execution.item().getId());
+        if (!ownsCurrentItem(execution, locked)) {
+            return false;
+        }
+        businessWrites.run();
+        return true;
+    }
+
+    private boolean ownsCurrentTask(StageItemExecution execution) {
+        if (execution.taskOwner() == null
+                || taskMapper.lockActiveClaim(execution.taskOwner().taskId(), execution.taskOwner().claimToken()) == null) {
+            reject(execution, "Task 已被接管或不再可提交");
+            return false;
+        }
+        return true;
+    }
+
+    private boolean ownsCurrentItem(StageItemExecution execution, PipelineStageItem locked) {
+        if (locked == null
+                || locked.getStatus() == null
+                || locked.getStatus() != PipelineStageItem.STATUS_RUNNING
+                || !java.util.Objects.equals(locked.getAttemptToken(), execution.attemptToken())
+                || !java.util.Objects.equals(locked.getOwnerTaskId(), execution.taskOwner().taskId())
+                || !java.util.Objects.equals(locked.getOwnerTaskClaimToken(), execution.taskOwner().claimToken())) {
+            reject(execution, "Stage Item 已被更新的 Attempt 接管");
+            return false;
+        }
+        return true;
+    }
+
+    private CommitResult reject(StageItemExecution execution, String reason) {
+        staleRejected.incrementAndGet();
+        log.warn("[fence] stale_commit_rejected item={} attempt={}: {}",
+                execution.item().getId(), execution.attemptToken(), reason);
+        return new CommitResult(false, null);
     }
 }

@@ -4,6 +4,7 @@ import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.TaskEntity;
 import com.aimanga.v2.repository.TaskMapper;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -49,6 +50,11 @@ class TaskRunnerTest {
                 org.mockito.ArgumentMatchers.anyInt())).thenReturn(1);
         when(mapper.selectById(1L)).thenReturn(task);
         when(mapper.updateProgress(eq(1L), anyString(), anyInt(), anyInt(), anyInt(), anyInt(), anyInt())).thenReturn(1);
+    }
+
+    @AfterEach
+    void tearDown() {
+        runner.shutdownHeartbeatScheduler();
     }
 
     @Test
@@ -169,5 +175,18 @@ class TaskRunnerTest {
 
         assertThatThrownBy(runtime::checkStop)
                 .isInstanceOf(TaskStopSignal.class);
+    }
+
+    @Test
+    void runtimeStopsWhenHeartbeatCanNoLongerConfirmOwnership() {
+        TaskEntity owned = new TaskEntity();
+        owned.setId(1L);
+        owned.setClaimToken("worker-a");
+        TaskRuntime runtime = new TaskRuntime(mapper, publisher, owned);
+        runtime.markOwnershipLost();
+
+        assertThatThrownBy(runtime::checkStop)
+                .isInstanceOf(TaskStopSignal.class);
+        verify(mapper, never()).selectById(any());
     }
 }

@@ -2,6 +2,9 @@ package com.aimanga.v2.pipeline;
 
 import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.repository.PipelineStageItemMapper;
+import com.aimanga.v2.repository.TaskMapper;
+import com.aimanga.v2.task.TaskExecutionOwner;
+import com.aimanga.v2.model.TaskEntity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -21,24 +24,32 @@ import static org.mockito.Mockito.when;
 class StageItemCommitServiceTest {
 
     private PipelineStageItemMapper itemMapper;
+    private TaskMapper taskMapper;
     private StageItemCommitService service;
     private PipelineStageItem locked;
 
     @BeforeEach
     void setUp() {
         itemMapper = mock(PipelineStageItemMapper.class);
-        service = new StageItemCommitService(itemMapper);
+        taskMapper = mock(TaskMapper.class);
+        service = new StageItemCommitService(itemMapper, taskMapper);
         locked = new PipelineStageItem();
         locked.setId(9001L);
         locked.setStatus(PipelineStageItem.STATUS_RUNNING);
         locked.setAttemptToken("TOKEN_B"); // 最新 Attempt B 持有
+        locked.setOwnerTaskId(77L);
+        locked.setOwnerTaskClaimToken("TASK_CLAIM_B");
         when(itemMapper.lockById(9001L)).thenReturn(locked);
+        TaskEntity owner = new TaskEntity();
+        owner.setId(77L);
+        owner.setClaimToken("TASK_CLAIM_B");
+        when(taskMapper.lockActiveClaim(77L, "TASK_CLAIM_B")).thenReturn(owner);
     }
 
     private StageItemExecution exec(String token) {
         PipelineStageItem item = new PipelineStageItem();
         item.setId(9001L);
-        return new StageItemExecution(item, token);
+        return new StageItemExecution(item, token, new TaskExecutionOwner(77L, "TASK_CLAIM_B"));
     }
 
     @Test
@@ -84,5 +95,33 @@ class StageItemCommitServiceTest {
                 exec("TOKEN_A"), () -> "should-not-run");
         assertThat(result.committed()).isFalse();
         assertThat(service.staleRejectedCount()).isEqualTo(1);
+    }
+
+    @Test
+    void revokedTaskClaim_rejectsOtherwiseCurrentStageAttempt() {
+        // Stage Item 的 attempt 仍有效，但 Task lease 已被看门狗接管：不能写正式业务结果。
+        when(taskMapper.lockActiveClaim(77L, "TASK_CLAIM_B")).thenReturn(null);
+        AtomicInteger businessWrites = new AtomicInteger();
+
+        StageItemCommitService.CommitResult result = service.commitFenced(exec("TOKEN_B"), () -> {
+            businessWrites.incrementAndGet();
+            return "must-not-write";
+        });
+
+        assertThat(result.committed()).isFalse();
+        assertThat(businessWrites.get()).isZero();
+        assertThat(locked.getStatus()).isEqualTo(PipelineStageItem.STATUS_RUNNING);
+        verify(itemMapper, never()).updateById(any(PipelineStageItem.class));
+    }
+
+    @Test
+    void revokedTaskClaim_alsoRejectsTemporaryBusinessStatusWrite() {
+        when(taskMapper.lockActiveClaim(77L, "TASK_CLAIM_B")).thenReturn(null);
+        AtomicInteger businessWrites = new AtomicInteger();
+
+        boolean written = service.runWhileOwned(exec("TOKEN_B"), businessWrites::incrementAndGet);
+
+        assertThat(written).isFalse();
+        assertThat(businessWrites.get()).isZero();
     }
 }

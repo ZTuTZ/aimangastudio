@@ -5,12 +5,14 @@ import com.aimanga.v2.model.TaskEntity;
 import com.aimanga.v2.repository.TaskMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import jakarta.annotation.PreDestroy;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -25,18 +27,11 @@ import java.util.stream.Collectors;
 @Component
 public class TaskRunner {
 
-    private static final long HEARTBEAT_INTERVAL_SECONDS = 30;
-
     private final TaskMapper taskMapper;
     private final TaskEventPublisher publisher;
     private final Map<String, TaskHandler> handlers;
     private final com.aimanga.v2.service.ConfigService configService;
-    private final java.util.concurrent.ScheduledExecutorService heartbeatScheduler =
-            java.util.concurrent.Executors.newScheduledThreadPool(1, r -> {
-                Thread t = new Thread(r, "task-heartbeat");
-                t.setDaemon(true);
-                return t;
-            });
+    private final java.util.concurrent.ScheduledExecutorService heartbeatScheduler;
 
     /** 本 JVM 实例 ID(Phase 8.4 多实例标识) */
     private static final String INSTANCE_ID = java.util.UUID.randomUUID().toString();
@@ -47,6 +42,12 @@ public class TaskRunner {
         this.publisher = publisher;
         this.handlers = handlerList.stream().collect(Collectors.toMap(TaskHandler::type, Function.identity()));
         this.configService = configService;
+        int heartbeatThreads = Math.max(1, Math.min(8, configService.getInt("task_heartbeat_threads", 2)));
+        this.heartbeatScheduler = java.util.concurrent.Executors.newScheduledThreadPool(heartbeatThreads, r -> {
+            Thread t = new Thread(r, "task-heartbeat");
+            t.setDaemon(true);
+            return t;
+        });
         log.info("[task] 已注册任务处理器: {} (instance={})", handlers.keySet(), INSTANCE_ID);
     }
 
@@ -67,14 +68,14 @@ public class TaskRunner {
         publisher.publishStatus(running, TaskStatus.RUNNING, "任务开始");
         TaskRuntime runtime = new TaskRuntime(taskMapper, publisher, running);
 
-        // 30 秒心跳:看门狗据此区分"仍在执行"与"僵尸"
+        // 心跳错误必须自行捕获；否则 ScheduledFuture 会永久取消，合法 STOPPING drain 会被误杀。
+        long heartbeatIntervalSeconds = Math.max(1, Math.min(30,
+                configService.getInt("task_heartbeat_interval_seconds", Math.max(1, leaseSeconds / 3))));
+        AtomicLong localLeaseDeadline = new AtomicLong(System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(leaseSeconds));
         ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(() -> {
-                    // Phase 8.4:心跳 CAS + 续租
-                    if (taskMapper.heartbeat(taskId, claimToken, leaseSeconds) == 0) {
-                        log.warn("[task] 心跳续租失败(执行锁已失效) taskId={}", taskId);
-                    }
+                    renewHeartbeat(taskId, claimToken, leaseSeconds, runtime, localLeaseDeadline);
                 },
-                HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_INTERVAL_SECONDS, TimeUnit.SECONDS);
+                heartbeatIntervalSeconds, heartbeatIntervalSeconds, TimeUnit.SECONDS);
 
         try {
             TaskHandler handler = handlers.get(running.getTaskType());
@@ -134,8 +135,32 @@ public class TaskRunner {
         }
         TaskEntity latest = taskMapper.selectById(task.getId());
         if (latest != null) {
-            publisher.publishStatus(latest, status, safeError);
+            publisher.publishStatus(latest, latest.getStatus(), latest.getError());
         }
+    }
+
+    private void renewHeartbeat(long taskId, String claimToken, int leaseSeconds, TaskRuntime runtime,
+                                AtomicLong localLeaseDeadline) {
+        try {
+            if (taskMapper.heartbeat(taskId, claimToken, leaseSeconds) == 1) {
+                localLeaseDeadline.set(System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(leaseSeconds));
+                return;
+            }
+            runtime.markOwnershipLost();
+            log.warn("[task] 心跳续租失败(执行锁已失效) taskId={}", taskId);
+        } catch (RuntimeException e) {
+            // 定时任务不能让异常逃出，否则后续心跳会被调度器取消。
+            log.warn("[task] 心跳写库异常 taskId={}: {}", taskId, e.getMessage());
+            if (System.currentTimeMillis() >= localLeaseDeadline.get()) {
+                runtime.markOwnershipLost();
+                log.warn("[task] 本地租约到期且心跳持续失败，停止继续执行 taskId={}", taskId);
+            }
+        }
+    }
+
+    @PreDestroy
+    void shutdownHeartbeatScheduler() {
+        heartbeatScheduler.shutdownNow();
     }
 
     private static String truncate(String s) {

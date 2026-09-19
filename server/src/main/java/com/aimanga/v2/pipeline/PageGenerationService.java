@@ -23,9 +23,8 @@ import java.util.List;
  * 成品页生成服务(Phase 6.3 T6.3.1 + Phase 8.1 fencing):
  * 页脚本 + 布局图 + 素材参考 + 风格 + 色彩 + 画幅 → AI → OSS,返回 PageGenResult。
  *
- * Phase 8.1:本服务只负责 幂等检查 + AI + OSS + GEN_RUNNING/GEN_FAILED 状态标记;
- * 正式业务写入(generated_image_url / generate_records / image_script_version)
- * 由调用方通过 StageItemCommitService.commitFenced 在短事务内完成 —— 旧 Attempt 会被拒绝。
+ * Phase 8.1:本服务只负责幂等检查与 AI/OSS 调用；页面状态变更由调用方在
+ * StageItemCommitService 的双层 fencing 内完成，避免旧 Attempt 污染可见状态。
  *
  * 最终参考图顺序(T6.3.2):布局图置顶(构图约束) → 素材图(身份/环境约束)。
  * 页与页之间零依赖(T6.3.3)。
@@ -65,7 +64,6 @@ public class PageGenerationService {
                 && (page.getLayoutImageUrl() == null || page.getLayoutImageUrl().isBlank())) {
             throw new BusinessException(400, "页面 " + page.getPageNo() + " 还没有布局图,请先生成布局");
         }
-        markPageStatus(page.getId(), PageEntity.GEN_RUNNING, null, null, null, null, null);
         PageReferenceResolver.ResolvedReferences refs =
                 referenceResolver.resolve(project.getId(), page.getId(), project);
         // 最终参考图:布局图置顶(构图约束),其后为素材图(身份/环境约束);直接出图模式无布局图
@@ -78,19 +76,12 @@ public class PageGenerationService {
 
         String mode = colorMode == null || colorMode.isBlank()
                 ? (project.getColorMode() == null ? "partial" : project.getColorMode()) : colorMode;
-        try {
-            // §9 前半:OSS 转存完成;业务字段写入移交 fenced commit(Phase 8.1)
-            String url = aiService.generateImage("image", prompt, images, project.getAspectRatio(), project.getUserId());
-            log.info("[page-gen] 作品 {} 话{} 页#{} 成品页 AI+OSS 完成: {}",
-                    project.getId(), page.getChapterId(), page.getPageNo(), url);
-            return new PageGenResult(url, mode, prompt, images,
-                    directOutput ? null : page.getLayoutImageUrl(), page.getChapterId(), page.getPageNo());
-        } catch (RuntimeException e) {
-            String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            markPageStatus(page.getId(), PageEntity.GEN_FAILED, null, null,
-                    reason, appendRecord(page.getGenerateRecords(), "", mode), null);
-            throw e;
-        }
+        // §9 前半:OSS 转存完成;业务字段写入移交 fenced commit(Phase 8.1)
+        String url = aiService.generateImage("image", prompt, images, project.getAspectRatio(), project.getUserId());
+        log.info("[page-gen] 作品 {} 话{} 页#{} 成品页 AI+OSS 完成: {}",
+                project.getId(), page.getChapterId(), page.getPageNo(), url);
+        return new PageGenResult(url, mode, prompt, images,
+                directOutput ? null : page.getLayoutImageUrl(), page.getChapterId(), page.getPageNo());
     }
 
     /** 成功业务写入(fenced commit 事务内调用):generated_image_url + records + image_script_version */
@@ -98,6 +89,16 @@ public class PageGenerationService {
         markPageStatus(pageId, PageEntity.GEN_SUCCESS, result.url(), result.mode(), null,
                 appendRecord(recordsJson, result.url(), result.mode()), orOne(scriptVersion));
         return "{\"pageId\":" + pageId + ",\"image\":\"" + result.url() + "\"}";
+    }
+
+    /** 临时状态也必须由调用方在 Stage Item + Task 双层 fencing 内写入。 */
+    public void markPageRunning(Long pageId) {
+        markPageStatus(pageId, PageEntity.GEN_RUNNING, null, null, null, null, null);
+    }
+
+    public void markPageFailed(Long pageId, String recordsJson, String colorMode, String reason) {
+        markPageStatus(pageId, PageEntity.GEN_FAILED, null, null, reason,
+                appendRecord(recordsJson, "", colorMode), null);
     }
 
     private static int orOne(Integer version) {

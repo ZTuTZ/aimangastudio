@@ -15,35 +15,49 @@ public interface PipelineStageItemMapper extends BaseMapper<PipelineStageItem> {
      * 影响行数=1 领取成功;=0 已被其他 Worker 领取(或状态已变化)。
      */
     @Update("UPDATE pipeline_stage_item SET status = 1, attempt_no = attempt_no + 1, " +
-            "attempt_token = #{attemptToken}, claimed_at = NOW(), update_time = NOW() " +
+            "attempt_token = #{attemptToken}, owner_task_id = #{ownerTaskId}, " +
+            "owner_task_claim_token = #{ownerTaskClaimToken}, claimed_at = NOW(), update_time = NOW() " +
             "WHERE id = #{id} AND status = 0")
-    int claim(@Param("id") Long id, @Param("attemptToken") String attemptToken);
+    int claim(@Param("id") Long id, @Param("attemptToken") String attemptToken,
+              @Param("ownerTaskId") Long ownerTaskId, @Param("ownerTaskClaimToken") String ownerTaskClaimToken);
 
     /**
      * Fenced 释放:RUNNING → PENDING。仅当前 token 持有者可释放;
      * 影响行数=0 说明 token 已失效(被新 Attempt 接管),调用方必须放弃本次执行结果。
      */
-    @Update("UPDATE pipeline_stage_item SET status = 0, attempt_token = NULL, claimed_at = NULL, update_time = NOW() " +
-            "WHERE id = #{id} AND status = 1 AND attempt_token = #{attemptToken}")
-    int release(@Param("id") Long id, @Param("attemptToken") String attemptToken);
+    @Update("UPDATE pipeline_stage_item SET status = 0, attempt_token = NULL, owner_task_id = NULL, " +
+            "owner_task_claim_token = NULL, claimed_at = NULL, update_time = NOW() " +
+            "WHERE id = #{id} AND status = 1 AND attempt_token = #{attemptToken} " +
+            "AND owner_task_id = #{ownerTaskId} AND owner_task_claim_token = #{ownerTaskClaimToken}")
+    int release(@Param("id") Long id, @Param("attemptToken") String attemptToken,
+                @Param("ownerTaskId") Long ownerTaskId, @Param("ownerTaskClaimToken") String ownerTaskClaimToken);
 
     /** Fenced 重试:RUNNING → PENDING + retry_count+1(仅当前 token) */
     @Update("UPDATE pipeline_stage_item SET status = 0, error_message = #{error}, " +
-            "retry_count = retry_count + 1, attempt_token = NULL, claimed_at = NULL, update_time = NOW() " +
-            "WHERE id = #{id} AND status = 1 AND attempt_token = #{attemptToken}")
-    int markRetry(@Param("id") Long id, @Param("attemptToken") String attemptToken, @Param("error") String error);
+            "retry_count = retry_count + 1, attempt_token = NULL, owner_task_id = NULL, " +
+            "owner_task_claim_token = NULL, claimed_at = NULL, update_time = NOW() " +
+            "WHERE id = #{id} AND status = 1 AND attempt_token = #{attemptToken} " +
+            "AND owner_task_id = #{ownerTaskId} AND owner_task_claim_token = #{ownerTaskClaimToken}")
+    int markRetry(@Param("id") Long id, @Param("attemptToken") String attemptToken,
+                  @Param("ownerTaskId") Long ownerTaskId, @Param("ownerTaskClaimToken") String ownerTaskClaimToken,
+                  @Param("error") String error);
 
     /** Fenced 终态失败:RUNNING → FAILED(仅当前 token) */
     @Update("UPDATE pipeline_stage_item SET status = 3, error_message = #{error}, finish_time = NOW(), " +
-            "attempt_token = NULL, update_time = NOW() " +
-            "WHERE id = #{id} AND status = 1 AND attempt_token = #{attemptToken}")
-    int markFailed(@Param("id") Long id, @Param("attemptToken") String attemptToken, @Param("error") String error);
+            "attempt_token = NULL, owner_task_id = NULL, owner_task_claim_token = NULL, update_time = NOW() " +
+            "WHERE id = #{id} AND status = 1 AND attempt_token = #{attemptToken} " +
+            "AND owner_task_id = #{ownerTaskId} AND owner_task_claim_token = #{ownerTaskClaimToken}")
+    int markFailed(@Param("id") Long id, @Param("attemptToken") String attemptToken,
+                   @Param("ownerTaskId") Long ownerTaskId, @Param("ownerTaskClaimToken") String ownerTaskClaimToken,
+                   @Param("error") String error);
 
     /** Fenced 成功:RUNNING → SUCCESS(仅当前 token) */
     @Update("UPDATE pipeline_stage_item SET status = 2, result_ref = #{resultRef}, finish_time = NOW(), " +
-            "attempt_token = NULL, update_time = NOW() " +
-            "WHERE id = #{id} AND status = 1 AND attempt_token = #{attemptToken}")
+            "attempt_token = NULL, owner_task_id = NULL, owner_task_claim_token = NULL, update_time = NOW() " +
+            "WHERE id = #{id} AND status = 1 AND attempt_token = #{attemptToken} " +
+            "AND owner_task_id = #{ownerTaskId} AND owner_task_claim_token = #{ownerTaskClaimToken}")
     int markSuccess(@Param("id") Long id, @Param("attemptToken") String attemptToken,
+                    @Param("ownerTaskId") Long ownerTaskId, @Param("ownerTaskClaimToken") String ownerTaskClaimToken,
                     @Param("resultRef") String resultRef);
 
     /** FOR UPDATE 行锁读取(fenced commit 事务内使用,Phase 8.1) */

@@ -103,11 +103,9 @@ public class SheetTaskHandler implements TaskHandler {
         if (!forceRegen && asset.getSheetImageUrl() != null && !asset.getSheetImageUrl().isBlank()) {
             return resultRef(asset.getId(), asset.getSheetImageUrl());
         }
-        Asset mark = new Asset();
-        mark.setId(asset.getId());
-        mark.setGenStatus(Asset.GEN_RUNNING);
-        mark.setUpdateTime(LocalDateTime.now());
-        ctx.assetMapper.updateById(mark);
+        if (!commitService.runWhileOwned(execution, () -> markGenerationStatus(asset.getId(), Asset.GEN_RUNNING))) {
+            throw new StaleCommitRejectedException(item.getId());
+        }
         try {
             String style = ctx.stylePromptOf(project);
             String prompt = "为角色「" + asset.getName() + "」创建参考表。综合设定:"
@@ -131,14 +129,21 @@ public class SheetTaskHandler implements TaskHandler {
                 throw new StaleCommitRejectedException(item.getId());
             }
             return commit.resultRef();
+        } catch (StaleCommitRejectedException e) {
+            throw e;
         } catch (Exception e) {
-            Asset patch = new Asset();
-            patch.setId(asset.getId());
-            patch.setGenStatus(Asset.GEN_FAILED);
-            patch.setUpdateTime(LocalDateTime.now());
-            ctx.assetMapper.updateById(patch);
+            // 旧 Task 的异常不能覆盖新 Attempt 的可见状态。
+            commitService.runWhileOwned(execution, () -> markGenerationStatus(asset.getId(), Asset.GEN_FAILED));
             throw e instanceof RuntimeException re ? re : new BusinessException(500, e.getMessage());
         }
+    }
+
+    private void markGenerationStatus(Long assetId, int status) {
+        Asset patch = new Asset();
+        patch.setId(assetId);
+        patch.setGenStatus(status);
+        patch.setUpdateTime(LocalDateTime.now());
+        ctx.assetMapper.updateById(patch);
     }
 
     /** 全量同步:清理孤儿 Item → 为尚无设定表的角色建 Item → 重跑时把失败 Item 重新排队 */

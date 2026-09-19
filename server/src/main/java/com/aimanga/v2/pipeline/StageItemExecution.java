@@ -6,6 +6,7 @@ package com.aimanga.v2.pipeline;
  */
 public record StageItemExecution(
         com.aimanga.v2.model.PipelineStageItem item,
-        String attemptToken
+        String attemptToken,
+        com.aimanga.v2.task.TaskExecutionOwner taskOwner
 ) {
 }

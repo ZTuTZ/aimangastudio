@@ -4,6 +4,7 @@ import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.PipelineStageItem;
 import com.aimanga.v2.service.ConfigService;
 import com.aimanga.v2.task.TaskRuntime;
+import com.aimanga.v2.task.TaskExecutionOwner;
 import com.aimanga.v2.task.TaskPauseSignal;
 import com.aimanga.v2.task.TaskStopSignal;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,6 +37,7 @@ class ConcurrentStageRunnerTest {
 
     private static final Long PROJECT_ID = 100L;
     private static final String STAGE = "SHEET";
+    private static final TaskExecutionOwner OWNER = new TaskExecutionOwner(91L, "TASK_CLAIM");
 
     private PipelineStageService stageService;
     private ConfigService configService;
@@ -48,6 +50,7 @@ class ConcurrentStageRunnerTest {
         stageService = mock(PipelineStageService.class);
         configService = mock(ConfigService.class);
         runtime = mock(TaskRuntime.class);
+        when(runtime.owner()).thenReturn(OWNER);
         // 真实 Worker 池(用 mock 配置驱动并发数);Runner 内部按余量领取,池线程数即并发上限
         when(configService.getInt(eq("image_generation_concurrency"), anyInt())).thenReturn(2);
         when(configService.getInt(eq("image_gen_max_retry"), anyInt())).thenReturn(1);
@@ -68,11 +71,11 @@ class ConcurrentStageRunnerTest {
 
         when(stageService.isStagePaused(eq(PROJECT_ID), eq(STAGE))).thenReturn(false);
         when(stageService.resetRunningItems(PROJECT_ID, STAGE)).thenReturn(0);
-        when(stageService.claimItem(anyLong(), anyString())).thenReturn(true);
+        when(stageService.claimItem(anyLong(), anyString(), any(TaskExecutionOwner.class))).thenReturn(true);
         // fenced 状态写默认成功(否则重试语义会变成 stale→重领 的无限循环)
-        when(stageService.markItemRetry(anyLong(), anyString(), anyString())).thenReturn(true);
-        when(stageService.markItemFailed(anyLong(), anyString(), anyString())).thenReturn(true);
-        when(stageService.markItemSuccess(anyLong(), anyString(), anyString())).thenReturn(true);
+        when(stageService.markItemRetry(anyLong(), anyString(), any(TaskExecutionOwner.class), anyString())).thenReturn(true);
+        when(stageService.markItemFailed(anyLong(), anyString(), any(TaskExecutionOwner.class), anyString())).thenReturn(true);
+        when(stageService.markItemSuccess(anyLong(), anyString(), any(TaskExecutionOwner.class), anyString())).thenReturn(true);
     }
 
     private PipelineStageItem item(long id, long businessId, int retryCount) {
@@ -127,9 +130,9 @@ class ConcurrentStageRunnerTest {
         }, runner.imageEngine());
 
         assertThat(attempts.get()).isEqualTo(2);
-        verify(stageService).markItemRetry(eq(1L), anyString(), contains("模型未返回图片"));
-        verify(stageService).markItemSuccess(eq(1L), anyString(), contains("assetId"));
-        verify(stageService, never()).markItemFailed(anyLong(), anyString(), anyString());
+        verify(stageService).markItemRetry(eq(1L), anyString(), eq(OWNER), contains("模型未返回图片"));
+        verify(stageService).markItemSuccess(eq(1L), anyString(), eq(OWNER), contains("assetId"));
+        verify(stageService, never()).markItemFailed(anyLong(), anyString(), any(TaskExecutionOwner.class), anyString());
         assertThat(result.success()).isEqualTo(1);
         assertThat(result.retried()).isEqualTo(1);
     }
@@ -148,8 +151,8 @@ class ConcurrentStageRunnerTest {
         }, runner.imageEngine());
 
         assertThat(attempts.get()).isEqualTo(2);
-        verify(stageService).markItemRetry(eq(1L), anyString(), anyString());
-        verify(stageService).markItemFailed(eq(1L), anyString(), contains("通道超时"));
+        verify(stageService).markItemRetry(eq(1L), anyString(), eq(OWNER), anyString());
+        verify(stageService).markItemFailed(eq(1L), anyString(), eq(OWNER), contains("通道超时"));
         verify(runtime).stepFail(anyString());
         assertThat(result.failed()).isEqualTo(1);
         assertThat(result.success()).isZero();
@@ -163,7 +166,7 @@ class ConcurrentStageRunnerTest {
         assertThatThrownBy(() -> runner.run(PROJECT_ID, STAGE, StageRunScope.all(), runtime, it -> "{}", runner.imageEngine()))
                 .isInstanceOf(TaskPauseSignal.class);
         verify(stageService, never()).getPendingItemIds(anyLong(), anyString(), anyInt());
-        verify(stageService, never()).claimItem(anyLong(), anyString());
+        verify(stageService, never()).claimItem(anyLong(), anyString(), any(TaskExecutionOwner.class));
     }
 
     @Test
@@ -172,7 +175,7 @@ class ConcurrentStageRunnerTest {
 
         assertThatThrownBy(() -> runner.run(PROJECT_ID, STAGE, StageRunScope.all(), runtime, it -> "{}", runner.imageEngine()))
                 .isInstanceOf(TaskStopSignal.class);
-        verify(stageService, never()).claimItem(anyLong(), anyString());
+        verify(stageService, never()).claimItem(anyLong(), anyString(), any(TaskExecutionOwner.class));
     }
 
     @Test
@@ -197,8 +200,8 @@ class ConcurrentStageRunnerTest {
         assertThatThrownBy(() -> runner.run(PROJECT_ID, STAGE, StageRunScope.all(), runtime, it -> "{}", runner.imageEngine()))
                 .isInstanceOf(TaskStopSignal.class);
 
-        verify(stageService, atLeastOnce()).releaseItem(org.mockito.ArgumentMatchers.eq(1L), anyString());
-        verify(stageService, never()).markItemSuccess(anyLong(), anyString(), anyString());
+        verify(stageService, atLeastOnce()).releaseItem(org.mockito.ArgumentMatchers.eq(1L), anyString(), eq(OWNER));
+        verify(stageService, never()).markItemSuccess(anyLong(), anyString(), any(TaskExecutionOwner.class), anyString());
     }
 
     @Test
@@ -216,6 +219,6 @@ class ConcurrentStageRunnerTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("已有生成任务在执行中");
         verify(stageService, never()).resetRunningItems(anyLong(), anyString());
-        verify(stageService, never()).claimItem(anyLong(), anyString());
+        verify(stageService, never()).claimItem(anyLong(), anyString(), any(TaskExecutionOwner.class));
     }
 }

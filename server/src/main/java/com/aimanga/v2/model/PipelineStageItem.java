@@ -45,6 +45,12 @@ public class PipelineStageItem {
     /** 当前执行 fencing token */
     private String attemptToken;
 
+    /** 领取本 Item 的 Task；与 ownerTaskClaimToken 一起构成任务级 fencing。 */
+    private Long ownerTaskId;
+
+    /** 领取本 Item 时 Task 的 claim token。 */
+    private String ownerTaskClaimToken;
+
     /** 当前 attempt 领取时间 */
     private LocalDateTime claimedAt;
 

@@ -95,11 +95,9 @@ public class AssetRefTaskHandler implements TaskHandler {
         if (!forceRegen && asset.getReferenceUrl() != null && !asset.getReferenceUrl().isBlank()) {
             return resultRef(asset.getId(), asset.getReferenceUrl());
         }
-        Asset mark = new Asset();
-        mark.setId(asset.getId());
-        mark.setGenStatus(Asset.GEN_RUNNING);
-        mark.setUpdateTime(LocalDateTime.now());
-        ctx.assetMapper.updateById(mark);
+        if (!commitService.runWhileOwned(execution, () -> markGenerationStatus(asset.getId(), Asset.GEN_RUNNING))) {
+            throw new StaleCommitRejectedException(item.getId());
+        }
         try {
             String ratio = ratioOf(project, asset.getAssetType());
             String subject = subjectOf(asset.getAssetType());
@@ -124,14 +122,21 @@ public class AssetRefTaskHandler implements TaskHandler {
                 throw new StaleCommitRejectedException(item.getId());
             }
             return commit.resultRef();
+        } catch (StaleCommitRejectedException e) {
+            throw e;
         } catch (Exception e) {
-            Asset patch = new Asset();
-            patch.setId(asset.getId());
-            patch.setGenStatus(Asset.GEN_FAILED);
-            patch.setUpdateTime(LocalDateTime.now());
-            ctx.assetMapper.updateById(patch);
+            // fenced commit 已拒绝时，旧 Worker 不得再把资产写为失败。
+            commitService.runWhileOwned(execution, () -> markGenerationStatus(asset.getId(), Asset.GEN_FAILED));
             throw e instanceof RuntimeException re ? re : new BusinessException(500, e.getMessage());
         }
+    }
+
+    private void markGenerationStatus(Long assetId, int status) {
+        Asset patch = new Asset();
+        patch.setId(assetId);
+        patch.setGenStatus(status);
+        patch.setUpdateTime(LocalDateTime.now());
+        ctx.assetMapper.updateById(patch);
     }
 
     /** 角色已有设定表时作为参考图传入,提升场景/道具/服装与角色风格一致性 */

@@ -196,13 +196,13 @@ public class PipelineStageService {
      * Item 原子领取(Phase 8.1 Attempt Fencing):PENDING → RUNNING 并写入 attempt 代次与 token。
      * 多个 Worker 同时领取同一 Item 时只有一个成功,保证同一页/同一角色不被重复生成。
      */
-    public boolean claimItem(Long itemId, String attemptToken) {
-        return itemMapper.claim(itemId, attemptToken) == 1;
+    public boolean claimItem(Long itemId, String attemptToken, com.aimanga.v2.task.TaskExecutionOwner taskOwner) {
+        return itemMapper.claim(itemId, attemptToken, taskOwner.taskId(), taskOwner.claimToken()) == 1;
     }
 
     /** Fenced 释放(用户停止/暂停时把在跑 Item 归还;token 失效=0 行,由调用方忽略) */
-    public void releaseItem(Long itemId, String attemptToken) {
-        itemMapper.release(itemId, attemptToken);
+    public void releaseItem(Long itemId, String attemptToken, com.aimanga.v2.task.TaskExecutionOwner taskOwner) {
+        itemMapper.release(itemId, attemptToken, taskOwner.taskId(), taskOwner.claimToken());
     }
 
     public PipelineStageItem getItem(Long itemId) {
@@ -210,18 +210,21 @@ public class PipelineStageService {
     }
 
     /** Item 失败重试(Phase 8.1 fenced):回到 PENDING 并累计 retry_count;token 失效返回 false */
-    public boolean markItemRetry(Long itemId, String attemptToken, String error) {
-        return itemMapper.markRetry(itemId, attemptToken, error) == 1;
+    public boolean markItemRetry(Long itemId, String attemptToken, com.aimanga.v2.task.TaskExecutionOwner taskOwner,
+                                 String error) {
+        return itemMapper.markRetry(itemId, attemptToken, taskOwner.taskId(), taskOwner.claimToken(), error) == 1;
     }
 
     /** Fenced 成功(Phase 8.1):仅当前 token 持有者可标成功;0 行=已被其他 Attempt 提交,忽略 */
-    public boolean markItemSuccess(Long itemId, String attemptToken, String resultRef) {
-        return itemMapper.markSuccess(itemId, attemptToken, resultRef) == 1;
+    public boolean markItemSuccess(Long itemId, String attemptToken, com.aimanga.v2.task.TaskExecutionOwner taskOwner,
+                                   String resultRef) {
+        return itemMapper.markSuccess(itemId, attemptToken, taskOwner.taskId(), taskOwner.claimToken(), resultRef) == 1;
     }
 
     /** Fenced 失败(Phase 8.1):仅当前 token 持有者可标失败;0 行=已被其他 Attempt 接管 */
-    public boolean markItemFailed(Long itemId, String attemptToken, String error) {
-        return itemMapper.markFailed(itemId, attemptToken, error) == 1;
+    public boolean markItemFailed(Long itemId, String attemptToken, com.aimanga.v2.task.TaskExecutionOwner taskOwner,
+                                  String error) {
+        return itemMapper.markFailed(itemId, attemptToken, taskOwner.taskId(), taskOwner.claimToken(), error) == 1;
     }
 
     /** 回收孤儿 RUNNING Items(进程崩溃/被杀残留)。任务层 claim_token+看门狗保证同一阶段同时只有一个 Runner,启动时重置安全。 */
@@ -232,6 +235,8 @@ public class PipelineStageService {
                 .eq(PipelineStageItem::getStatus, PipelineStageItem.STATUS_RUNNING)
                 .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING)
                 .set(PipelineStageItem::getAttemptToken, null)
+                .set(PipelineStageItem::getOwnerTaskId, null)
+                .set(PipelineStageItem::getOwnerTaskClaimToken, null)
                 .set(PipelineStageItem::getClaimedAt, null));
     }
 

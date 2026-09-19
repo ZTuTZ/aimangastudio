@@ -112,25 +112,15 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         TaskEntity task = requireAccessible(taskId);
         int status = task.getStatus() == null ? TaskStatus.PENDING : task.getStatus();
         if (status == TaskStatus.PENDING) {
-            TaskEntity patch = new TaskEntity();
-            patch.setId(taskId);
-            patch.setStatus(TaskStatus.STOPPED);
-            patch.setError("已停止");
-            patch.setEndTime(LocalDateTime.now());
-            updateById(patch);
+            if (baseMapper.stopPendingOrPaused(taskId) == 0) {
+                throw new BusinessException(409, "任务状态已变化,请刷新后重试");
+            }
         } else if (status == TaskStatus.RUNNING) {
-            TaskEntity patch = new TaskEntity();
-            patch.setId(taskId);
-            patch.setStatus(TaskStatus.STOPPING);
-            updateById(patch);
+            if (baseMapper.requestStopRunning(taskId) == 0) {
+                throw new BusinessException(409, "任务状态已变化,请刷新后重试");
+            }
         } else if (status == TaskStatus.PAUSED) {
-            int updated = baseMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<TaskEntity>()
-                    .eq(TaskEntity::getId, taskId)
-                    .eq(TaskEntity::getStatus, TaskStatus.PAUSED)
-                    .set(TaskEntity::getStatus, TaskStatus.STOPPED)
-                    .set(TaskEntity::getError, "已停止")
-                    .set(TaskEntity::getEndTime, LocalDateTime.now()));
-            if (updated == 0) {
+            if (baseMapper.stopPendingOrPaused(taskId) == 0) {
                 throw new BusinessException(409, "任务状态已变化,请刷新后重试");
             }
         } else {
@@ -151,6 +141,7 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         // 清执行锁/心跳/时间(updateById 忽略 null,须用 UpdateWrapper 显式置空);人工重试重置自动重试计数
         int updated = baseMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<TaskEntity>()
                 .eq(TaskEntity::getId, taskId)
+                .eq(TaskEntity::getStatus, status)
                 .set(TaskEntity::getStatus, TaskStatus.PENDING)
                 .set(TaskEntity::getProgress, 0)
                 .set(TaskEntity::getSuccessCount, 0)

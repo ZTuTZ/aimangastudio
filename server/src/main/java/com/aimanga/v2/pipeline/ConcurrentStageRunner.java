@@ -158,12 +158,12 @@ public class ConcurrentStageRunner {
             int capacity = concurrency - inFlight.get();
             while (capacity > 0) {
                 String attemptToken = java.util.UUID.randomUUID().toString().replace("-", "");
-                PipelineStageItem item = claimNext(projectId, stageType, scope, claimed, attemptToken);
+                PipelineStageItem item = claimNext(projectId, stageType, scope, claimed, attemptToken, runtime.owner());
                 if (item == null) {
                     break;
                 }
                 inFlight.incrementAndGet();
-                StageItemExecution execution = new StageItemExecution(item, attemptToken);
+                StageItemExecution execution = new StageItemExecution(item, attemptToken, runtime.owner());
                 try {
                     engine.pool().submit(() -> {
                         try {
@@ -178,7 +178,7 @@ public class ConcurrentStageRunner {
                     // 理论不可达(Runner 按余量领取,队列不积压);兜底:归还 Item,下轮重领
                     inFlight.decrementAndGet();
                     claimed.remove(item.getId());
-                    stageService.releaseItem(item.getId(), attemptToken);
+                    stageService.releaseItem(item.getId(), attemptToken, runtime.owner());
                     log.warn("[stage] {} 提交失败已归还 Item {}: {}", stageType, item.getId(), e.getMessage());
                     break;
                 }
@@ -212,7 +212,8 @@ public class ConcurrentStageRunner {
     /** 原子领取下一个待执行 Item(§5 + Phase 8.1 fencing + Phase 8.2 scope):
      *  领取失败(被抢)自动换下一个候选;有 scope 时只能领取本次 Task 允许的 Item */
     private PipelineStageItem claimNext(Long projectId, String stageType, StageRunScope scope,
-                                        Set<Long> claimed, String attemptToken) {
+                                        Set<Long> claimed, String attemptToken,
+                                        com.aimanga.v2.task.TaskExecutionOwner taskOwner) {
         List<Long> candidates = scope != null && !scope.isUnbounded()
                 ? stageService.getPendingItemIdsInScope(projectId, stageType, scope.businessType(),
                         scope.businessIds(), FEED_BATCH)
@@ -221,7 +222,7 @@ public class ConcurrentStageRunner {
             if (!claimed.add(id)) {
                 continue;
             }
-            if (stageService.claimItem(id, attemptToken)) {
+            if (stageService.claimItem(id, attemptToken, taskOwner)) {
                 PipelineStageItem item = stageService.getItem(id);
                 if (item != null) {
                     return item;
@@ -243,13 +244,13 @@ public class ConcurrentStageRunner {
             runtime.checkStop();
             if (paused.get() || stopped.get()) {
                 // 领取后阶段被暂停/任务被停止:归还 Item,下次继续
-                stageService.releaseItem(item.getId(), attemptToken);
+                stageService.releaseItem(item.getId(), attemptToken, execution.taskOwner());
                 claimed.remove(item.getId());
                 return;
             }
             String resultRef = processor.process(execution);
             // Fenced 成功:0 行说明正式结果已由 commitFenced(更新 Attempt)写入,此处忽略
-            stageService.markItemSuccess(item.getId(), attemptToken, resultRef);
+            stageService.markItemSuccess(item.getId(), attemptToken, execution.taskOwner(), resultRef);
             success.incrementAndGet();
             runtime.stepSuccess();
             stageService.updateStageProgress(projectId, stageType);
@@ -259,14 +260,14 @@ public class ConcurrentStageRunner {
             claimed.remove(item.getId());
             log.warn("[stage] {} Item {} stale attempt 提交被拒(fencing 生效)", stageType, item.getId());
         } catch (TaskStopSignal s) {
-            stageService.releaseItem(item.getId(), attemptToken);
+            stageService.releaseItem(item.getId(), attemptToken, execution.taskOwner());
             claimed.remove(item.getId());
         } catch (Exception e) {
             int retryCount = item.getRetryCount() == null ? 0 : item.getRetryCount();
             String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             if (retryCount < maxRetry) {
                 // §6 失败重试:retry_count+1 → 回到 PENDING,下一轮重新领取执行(fenced:0 行=已被接管,放弃)
-                if (stageService.markItemRetry(item.getId(), attemptToken, message)) {
+                if (stageService.markItemRetry(item.getId(), attemptToken, execution.taskOwner(), message)) {
                     claimed.remove(item.getId());
                     retried.incrementAndGet();
                     log.warn("[stage] {} Item {} 第 {} 次失败将重试: {}", stageType, item.getId(), retryCount + 1, message);
@@ -275,7 +276,7 @@ public class ConcurrentStageRunner {
                     claimed.remove(item.getId());
                     log.warn("[stage] {} Item {} 重试提交被拒(stale attempt)", stageType, item.getId());
                 }
-            } else if (stageService.markItemFailed(item.getId(), attemptToken, message)) {
+            } else if (stageService.markItemFailed(item.getId(), attemptToken, execution.taskOwner(), message)) {
                 failed.incrementAndGet();
                 runtime.stepFail(message);
                 stageService.updateStageProgress(projectId, stageType);
