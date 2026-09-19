@@ -12,6 +12,7 @@ import com.aimanga.v2.pipeline.asset.AssetPackBuilder;
 import com.aimanga.v2.task.TaskHandler;
 import com.aimanga.v2.task.TaskRuntime;
 import com.aimanga.v2.task.TaskStopSignal;
+import com.aimanga.v2.task.TaskPauseSignal;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -87,6 +88,7 @@ public class AssetTaskHandler implements TaskHandler {
                 final List<Chapter> pack = packs.get(i);
                 futures.add(CompletableFuture.runAsync(() -> {
                     runtime.checkStop();
+                    runtime.checkPauseRequested();
                     StringBuilder text = new StringBuilder();
                     for (Chapter chapter : pack) {
                         text.append("第").append(chapter.getChapterNo()).append("话 ")
@@ -100,6 +102,7 @@ public class AssetTaskHandler implements TaskHandler {
                     RuntimeException last = null;
                     for (int attempt = 0; attempt < 3; attempt++) {
                         try {
+                            runtime.checkPauseRequested();
                             result = aiService.chatJson("text", prompt, AssetExtractResult.class);
                             break;
                         } catch (BusinessException e) {
@@ -122,6 +125,9 @@ public class AssetTaskHandler implements TaskHandler {
                 if (cause instanceof TaskStopSignal signal) {
                     throw signal;
                 }
+                if (cause instanceof TaskPauseSignal signal) {
+                    throw signal;
+                }
                 if (cause instanceof BusinessException be) {
                     throw be;
                 }
@@ -134,6 +140,7 @@ public class AssetTaskHandler implements TaskHandler {
         runtime.stepSuccess();
 
         // 全局合并 + 一次 upsert(保护人工值)
+        runtime.checkPauseRequested();
         List<AssetExtractResult> successResults = packResults.stream().filter(java.util.Objects::nonNull).toList();
         var canonical = mergeService.mergePacks(successResults);
         var stats = mergeService.upsertAll(project.getId(), canonical);
@@ -152,6 +159,7 @@ public class AssetTaskHandler implements TaskHandler {
         ctx.taskMapper.updateById(patch);
 
         // Phase 5.8:创建 SCRIPT Stage Items(每话一个执行单元),入队单个 SCRIPT Task 批量处理
+        runtime.checkPauseRequested();
         List<Long> chapterIds = chapters.stream().map(Chapter::getId).toList();
         stageService.createItems(project.getId(), PipelineStageService.STAGE_SCRIPT, "CHAPTER", chapterIds);
         ctx.enqueueUnique(project.getId(), null, ScriptTaskHandler.TYPE, "{}");

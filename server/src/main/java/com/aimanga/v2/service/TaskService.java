@@ -67,7 +67,9 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         task.setProjectId(project.getId());
         task.setChapterId(request.chapterId());
         task.setTaskType(type);
-        task.setStatus(TaskStatus.PENDING);
+        task.setStatus(initialStatus(project));
+        task.setPauseRequested(false);
+        task.setControlVersion(0L);
         task.setPriority(0);
         task.setProgress(0);
         task.setTotalCount(0);
@@ -78,10 +80,16 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         task.setError("");
         task.setCreateTime(LocalDateTime.now());
         save(task);
-        taskQueue.enqueue(task.getId());
+        if (task.getStatus() == TaskStatus.PENDING) {
+            taskQueue.enqueue(task.getId());
+        }
         publisher.publishCreated(task);
         log.info("[task] 创建任务 type={} id={} projectId={}", type, task.getId(), project.getId());
         return toVO(task, project.getTitle());
+    }
+
+    static int initialStatus(Project project) {
+        return Boolean.TRUE.equals(project.getPauseRequested()) ? TaskStatus.PAUSED : TaskStatus.PENDING;
     }
 
     public PageResult<TaskVO> listPaged(int page, int size, Integer status, String type, Long projectId, String keyword) {
@@ -131,6 +139,18 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         return latest;
     }
 
+    /** 单任务暂停登记意图；运行中的请求由 Runner drain 后进入 PAUSED。 */
+    public TaskEntity pause(Long taskId) {
+        TaskEntity task = requireAccessible(taskId);
+        int status = task.getStatus() == null ? TaskStatus.PENDING : task.getStatus();
+        int updated = status == TaskStatus.RUNNING ? baseMapper.requestPauseRunning(taskId)
+                : status == TaskStatus.PENDING ? baseMapper.pausePending(taskId) : 0;
+        if (updated == 0) throw new BusinessException(409, "任务状态已变化,请刷新后重试");
+        TaskEntity latest = getById(taskId);
+        publisher.publishStatus(latest, latest.getStatus(), "已请求暂停");
+        return latest;
+    }
+
     /** 重试:终态任务重置为排队中并重新入队(保留断点 current_no;清执行锁/心跳;重置自动重试计数) */
     public TaskEntity retry(Long taskId) {
         TaskEntity task = requireAccessible(taskId);
@@ -165,7 +185,20 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
     /** 恢复暂停任务(Phase 8.3 §5.4):PAUSED → PENDING,payload/进度/计数原样保留 —— 同一 Task 继续 */
     public TaskEntity resume(Long taskId) {
         TaskEntity task = requireAccessible(taskId);
-        if (!TaskStatus.resumable(task.getStatus() == null ? TaskStatus.PENDING : task.getStatus())) {
+        Project project = projectService.getById(task.getProjectId());
+        if (project != null && Boolean.TRUE.equals(project.getPauseRequested())) {
+            throw new BusinessException(409, "项目仍处于暂停状态,请先恢复项目");
+        }
+        int currentStatus = task.getStatus() == null ? TaskStatus.PENDING : task.getStatus();
+        if (currentStatus == TaskStatus.RUNNING && Boolean.TRUE.equals(task.getPauseRequested())) {
+            if (baseMapper.cancelPauseRunning(taskId) == 0) {
+                throw new BusinessException(409, "任务状态已变化,请刷新后重试");
+            }
+            TaskEntity latest = getById(taskId);
+            publisher.publishStatus(latest, TaskStatus.RUNNING, "已取消暂停请求");
+            return latest;
+        }
+        if (!TaskStatus.resumable(currentStatus)) {
             throw new BusinessException(409, "任务未处于暂停状态");
         }
         int updated = baseMapper.resumeTask(taskId);
@@ -217,6 +250,7 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         vo.setRetryCount(task.getRetryCount());
         vo.setMaxRetryCount(task.getMaxRetryCount());
         vo.setLastError(task.getLastError());
+        vo.setPauseRequested(task.getPauseRequested());
         vo.setProjectTitle(projectTitle);
         return vo;
     }
@@ -239,7 +273,9 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         task.setProjectId(projectId);
         task.setChapterId(chapterId);
         task.setTaskType(type);
-        task.setStatus(TaskStatus.PENDING);
+        task.setStatus(initialStatus(project));
+        task.setPauseRequested(false);
+        task.setControlVersion(0L);
         task.setPriority(0);
         task.setProgress(0);
         task.setTotalCount(0);
@@ -250,7 +286,9 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         task.setError("");
         task.setCreateTime(LocalDateTime.now());
         save(task);
-        taskQueue.enqueue(task.getId());
+        if (task.getStatus() == TaskStatus.PENDING) {
+            taskQueue.enqueue(task.getId());
+        }
         publisher.publishCreated(task);
         return task;
     }

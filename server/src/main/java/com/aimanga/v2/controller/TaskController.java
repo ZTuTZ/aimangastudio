@@ -57,6 +57,11 @@ public class TaskController {
         return Result.ok(taskService.toVO(taskService.stop(id)));
     }
 
+    @PostMapping("/{id}/pause")
+    public Result<TaskVO> pause(@PathVariable Long id) {
+        return Result.ok(taskService.toVO(taskService.pause(id)));
+    }
+
     @PostMapping("/{id}/retry")
     public Result<TaskVO> retry(@PathVariable Long id) {
         return Result.ok(taskService.toVO(taskService.retry(id)));

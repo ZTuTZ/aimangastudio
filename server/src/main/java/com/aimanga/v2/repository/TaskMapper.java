@@ -11,6 +11,12 @@ import java.util.List;
 
 public interface TaskMapper extends BaseMapper<TaskEntity> {
 
+    /** 当前执行所有者是否受到任务级或项目级暂停意图约束。 */
+    @Select("SELECT EXISTS(SELECT 1 FROM task t LEFT JOIN project p ON p.id = t.project_id " +
+            "WHERE t.id = #{id} AND t.claim_token = #{claimToken} AND t.status IN (1, 6) " +
+            "AND (t.pause_requested = 1 OR COALESCE(p.pause_requested, 0) = 1))")
+    boolean isEffectivePauseRequested(@Param("id") Long id, @Param("claimToken") String claimToken);
+
     /**
      * Fenced 业务提交前锁定仍由本 Worker 持有的 Task。
      * STOPPING 仍允许已领取 Item 收尾；PAUSED/终态/被接管的 Task 一律拒绝。
@@ -23,7 +29,8 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
     @Update("UPDATE task SET status = 1, claim_token = #{token}, heartbeat_time = NOW(), start_time = NOW(), " +
             "worker_instance_id = #{instanceId}, " +
             "lease_until = DATE_ADD(NOW(), INTERVAL #{leaseSeconds} SECOND) " +
-            "WHERE id = #{id} AND status = 0")
+            "WHERE id = #{id} AND status = 0 AND pause_requested = 0 " +
+            "AND NOT EXISTS (SELECT 1 FROM project p WHERE p.id = task.project_id AND p.pause_requested = 1)")
     int claim(@Param("id") Long id, @Param("token") String token,
               @Param("instanceId") String instanceId, @Param("leaseSeconds") int leaseSeconds);
 
@@ -89,6 +96,7 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
             "(lease_until IS NOT NULL AND lease_until < NOW()) OR " +
             "(max_execution_seconds IS NOT NULL AND start_time IS NOT NULL " +
             "AND start_time < DATE_SUB(NOW(), INTERVAL max_execution_seconds SECOND)))")
+    int failZombie(@Param("id") Long id, @Param("token") String token, @Param("error") String error);
 
     /** 用户停止意图:仅 RUNNING 可进入 STOPPING，避免覆盖已完成的终态。 */
     @Update("UPDATE task SET status = 6 WHERE id = #{id} AND status = 1")
@@ -99,7 +107,27 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
             "heartbeat_time = NULL, lease_until = NULL, worker_instance_id = NULL " +
             "WHERE id = #{id} AND status IN (0, 7)")
     int stopPendingOrPaused(@Param("id") Long id);
-    int failZombie(@Param("id") Long id, @Param("token") String token, @Param("error") String error);
+
+    @Update("UPDATE task SET pause_requested = 1, control_version = control_version + 1 WHERE id = #{id} AND status = 1")
+    int requestPauseRunning(@Param("id") Long id);
+
+    @Update("UPDATE task SET status = 7, pause_requested = 1, control_version = control_version + 1 WHERE id = #{id} AND status = 0")
+    int pausePending(@Param("id") Long id);
+
+    @Update("UPDATE task SET status = 7 WHERE project_id = #{projectId} AND status = 0")
+    int pausePendingForProject(@Param("projectId") Long projectId);
+
+    @Select("SELECT id FROM task WHERE project_id = #{projectId} AND status = 7 AND pause_requested = 0 ORDER BY id")
+    List<Long> selectProjectPausedTaskIds(@Param("projectId") Long projectId);
+
+    @Update("UPDATE task SET status = 0, control_version = control_version + 1 " +
+            "WHERE id = #{id} AND status = 7 AND pause_requested = 0")
+    int resumeProjectPausedTask(@Param("id") Long id);
+
+    @Update("UPDATE task SET pause_requested = 0, control_version = control_version + 1 " +
+            "WHERE id = #{id} AND status = 1 AND pause_requested = 1 " +
+            "AND NOT EXISTS (SELECT 1 FROM project p WHERE p.id = task.project_id AND p.pause_requested = 1)")
+    int cancelPauseRunning(@Param("id") Long id);
 
     /** 看门狗:扫描心跳超时的僵尸任务 */
     @Select("SELECT * FROM task WHERE status = 1 AND heartbeat_time IS NOT NULL " +
@@ -109,12 +137,18 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
     /** 租约/执行超时的回收(Phase 8.4):以 claim_token 为围栏,不看心跳时间 */
     @Update("UPDATE task SET status = 0, retry_count = retry_count + 1, claim_token = NULL, heartbeat_time = NULL, " +
             "lease_until = NULL, worker_instance_id = NULL, error = #{error}, last_error = #{error} " +
-            "WHERE id = #{id} AND claim_token = #{token} AND status = 1")
+            "WHERE id = #{id} AND claim_token = #{token} AND status = 1 AND (" +
+            "(lease_until IS NOT NULL AND lease_until < NOW()) OR " +
+            "(max_execution_seconds IS NOT NULL AND start_time IS NOT NULL " +
+            "AND start_time < DATE_SUB(NOW(), INTERVAL max_execution_seconds SECOND)))")
     int requeueRevoked(@Param("id") Long id, @Param("token") String token, @Param("error") String error);
 
     @Update("UPDATE task SET status = 3, claim_token = NULL, heartbeat_time = NULL, end_time = NOW(), " +
             "lease_until = NULL, worker_instance_id = NULL, error = #{error}, last_error = #{error} " +
-            "WHERE id = #{id} AND claim_token = #{token} AND status = 1")
+            "WHERE id = #{id} AND claim_token = #{token} AND status = 1 AND (" +
+            "(lease_until IS NOT NULL AND lease_until < NOW()) OR " +
+            "(max_execution_seconds IS NOT NULL AND start_time IS NOT NULL " +
+            "AND start_time < DATE_SUB(NOW(), INTERVAL max_execution_seconds SECOND)))")
     int failRevoked(@Param("id") Long id, @Param("token") String token, @Param("error") String error);
 
     /** Redis 补偿:扫描长时间排队但未被执行的任务(create_time 超过 60 秒仍在排队) */
@@ -122,14 +156,17 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
     List<TaskEntity> selectStalePending();
 
     /** 暂停任务(Phase 8.3):RUNNING → PAUSED,保留 payload/进度/计数,清执行锁与心跳 */
-    @Update("UPDATE task SET status = 7, claim_token = NULL, heartbeat_time = NULL, " +
+    @Update("UPDATE task SET status = CASE WHEN pause_requested = 1 OR EXISTS (" +
+            "SELECT 1 FROM project p WHERE p.id = task.project_id AND p.pause_requested = 1" +
+            ") THEN 7 ELSE 0 END, claim_token = NULL, heartbeat_time = NULL, " +
             "lease_until = NULL, worker_instance_id = NULL " +
             "WHERE id = #{id} AND claim_token = #{claimToken} AND status = 1")
     int pauseTask(@Param("id") Long id, @Param("claimToken") String claimToken);
 
     /** 恢复暂停任务(Phase 8.3):PAUSED → PENDING,payload/进度/计数原样保留 */
-    @Update("UPDATE task SET status = 0, error = '', claim_token = NULL, heartbeat_time = NULL " +
-            "WHERE id = #{id} AND status = 7")
+    @Update("UPDATE task SET status = 0, pause_requested = 0, control_version = control_version + 1, error = '', claim_token = NULL, heartbeat_time = NULL " +
+            "WHERE id = #{id} AND status = 7 " +
+            "AND NOT EXISTS (SELECT 1 FROM project p WHERE p.id = task.project_id AND p.pause_requested = 1)")
     int resumeTask(@Param("id") Long id);
 
     @Select("""
@@ -156,6 +193,7 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
                    t.create_time AS createTime, t.start_time AS startTime, t.end_time AS endTime,
                    t.retry_count AS retryCount, t.max_retry_count AS maxRetryCount,
                    LEFT(t.last_error, 200) AS lastError,
+                   t.pause_requested AS pauseRequested,
                    p.title AS projectTitle
             FROM task t
             LEFT JOIN project p ON t.project_id = p.id

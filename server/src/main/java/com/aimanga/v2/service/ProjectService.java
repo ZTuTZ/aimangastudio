@@ -111,6 +111,7 @@ public class ProjectService extends ServiceImpl<ProjectMapper, Project> {
         vo.setUpdateTime(project.getUpdateTime());
         vo.setChapterCount(chapterCount == null ? 0 : chapterCount);
         vo.setPageCount(pageCount == null ? 0 : pageCount);
+        vo.setPauseRequested(project.getPauseRequested());
         return vo;
     }
 

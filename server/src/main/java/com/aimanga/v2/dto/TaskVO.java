@@ -53,4 +53,6 @@ public class TaskVO {
 
     /** 最后一次错误记录 */
     private String lastError;
+
+    private Boolean pauseRequested;
 }

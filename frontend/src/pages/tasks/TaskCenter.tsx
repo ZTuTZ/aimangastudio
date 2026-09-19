@@ -116,9 +116,11 @@ export function TaskCenter() {
       title: '状态',
       dataIndex: 'status',
       width: 100,
-      render: (s: number) => {
+      render: (s: number, row) => {
         const meta = TASK_STATUS[s] ?? { label: '未知', color: 'default' };
-        return <Tag color={meta.color} bordered={false}>{meta.label}</Tag>;
+        return <Tag color={meta.color} bordered={false}>
+          {row.pauseRequested && s === 1 ? '暂停中' : meta.label}
+        </Tag>;
       },
     },
     {
@@ -169,9 +171,21 @@ export function TaskCenter() {
         return (
           <Space size={0}>
             {active && (
-              <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => withTaskAction(row, tasksApi.stop, '已请求停止')}>
-                停止
-              </Button>
+              <>
+                {row.status === 1 && !row.pauseRequested && (
+                  <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => withTaskAction(row, tasksApi.pause, '已请求暂停')}>
+                    暂停
+                  </Button>
+                )}
+                {row.status === 1 && row.pauseRequested && (
+                  <Button type="link" size="small" style={{ paddingInline: 4 }} onClick={() => withTaskAction(row, tasksApi.resume, '已取消暂停')}>
+                    取消暂停
+                  </Button>
+                )}
+                <Button type="link" size="small" danger style={{ paddingInline: 4 }} onClick={() => withTaskAction(row, tasksApi.stop, '已请求停止')}>
+                  停止
+                </Button>
+              </>
             )}
             {paused && (
               <>

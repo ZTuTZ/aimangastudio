@@ -36,7 +36,8 @@ class PipelineStageServiceScopeTest {
     @Test
     void emptyScopedBusinessIdsDoNotExpandToProjectPendingItems() {
         PipelineStageItemMapper itemMapper = mock(PipelineStageItemMapper.class);
-        PipelineStageService service = new PipelineStageService(mock(PipelineStageMapper.class), itemMapper);
+        PipelineStageService service = new PipelineStageService(mock(PipelineStageMapper.class), itemMapper,
+                mock(com.aimanga.v2.repository.ProjectMapper.class));
         when(itemMapper.selectPendingIds(1L, "IMAGE", 64)).thenReturn(List.of(101L));
 
         List<Long> pending = service.getPendingItemIdsInScope(
@@ -51,7 +52,8 @@ class PipelineStageServiceScopeTest {
     @Test
     void successfulItemResetClearsJsonResultReferenceWithSqlNull() {
         PipelineStageItemMapper itemMapper = mock(PipelineStageItemMapper.class);
-        PipelineStageService service = new PipelineStageService(mock(PipelineStageMapper.class), itemMapper);
+        PipelineStageService service = new PipelineStageService(mock(PipelineStageMapper.class), itemMapper,
+                mock(com.aimanga.v2.repository.ProjectMapper.class));
         when(itemMapper.update(isNull(), any())).thenReturn(1);
 
         service.resetSuccessfulItemsByBusiness(1L, "IMAGE", "PAGE", List.of(11L));

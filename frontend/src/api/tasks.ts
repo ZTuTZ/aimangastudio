@@ -23,6 +23,7 @@ export interface TaskVO {
   retryCount: number;
   maxRetryCount: number;
   lastError: string | null;
+  pauseRequested?: boolean;
   projectTitle: string | null;
 }
 
@@ -59,6 +60,7 @@ export const tasksApi = {
   create: (data: { projectId: number; chapterId?: number; taskType: string; payload?: unknown }) =>
     unwrap<TaskVO>(http.post('/tasks', data)),
   stop: (id: number) => unwrap<TaskVO>(http.post(`/tasks/${id}/stop`)),
+  pause: (id: number) => unwrap<TaskVO>(http.post(`/tasks/${id}/pause`)),
   retry: (id: number) => unwrap<TaskVO>(http.post(`/tasks/${id}/retry`)),
   resume: (id: number) => unwrap<TaskVO>(http.post(`/tasks/${id}/resume`)),
   remove: (id: number) => unwrap<void>(http.delete(`/tasks/${id}`)),

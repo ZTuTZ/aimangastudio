@@ -101,15 +101,18 @@ public class SplitTaskHandler implements TaskHandler {
         // 1. 滚动小包规划(AI 只回边界,Java 按 offset 切片)
         List<ChapterPlan> plans = planner.plan(sourceText, units, p -> {
             runtime.checkStop(); // 每包之间感知停止
+            runtime.checkPauseRequested();
             runtime.setProgress(p);
         });
         runtime.stepSuccess();
 
         // 2. 覆盖校验通过后一次性重建话(事务)
+        runtime.checkPauseRequested();
         List<Chapter> chapters = chapterRebuildService.rebuild(project.getId(), sourceText, plans);
         runtime.stepSuccess();
 
         // 3. 元数据(独立小请求,失败仅告警,不影响拆话结果)
+        runtime.checkPauseRequested();
         String warning = applyMetadata(project, sourceText, plans, refreshMetadata);
         runtime.stepSuccess();
         if (warning != null) {
@@ -125,6 +128,7 @@ public class SplitTaskHandler implements TaskHandler {
         }
 
         // 4. 链式入队:SPLIT → ASSET(feature_auto_asset)或直接 SCRIPT×N
+        runtime.checkPauseRequested();
         if (ctx.feature("feature_auto_asset")) {
             ctx.enqueueUnique(project.getId(), null, AssetTaskHandler.TYPE, "{}");
         } else {

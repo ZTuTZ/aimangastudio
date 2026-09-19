@@ -98,6 +98,13 @@ public class TaskRuntime {
         }
     }
 
+    /** 运行中的任务读到持久化暂停意图后停止领取新工作，由 Runner 等待在途请求收尾。 */
+    public void checkPauseRequested() {
+        if (taskMapper.isEffectivePauseRequested(task.getId(), task.getClaimToken())) {
+            throw new TaskPauseSignal();
+        }
+    }
+
     private void recalcAndPersist() {
         if (total > 0) {
             int done = success.get() + fail.get();

@@ -82,4 +82,9 @@ public class TaskEntity {
 
     /** 最后一次错误记录 */
     private String lastError;
+
+    /** 单任务暂停意图；与项目暂停意图独立。 */
+    private Boolean pauseRequested;
+
+    private Long controlVersion;
 }

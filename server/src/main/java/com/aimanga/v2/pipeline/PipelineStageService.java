@@ -2,6 +2,7 @@ package com.aimanga.v2.pipeline;
 
 import com.aimanga.v2.model.PipelineStage;
 import com.aimanga.v2.model.PipelineStageItem;
+import com.aimanga.v2.model.Project;
 import com.aimanga.v2.repository.PipelineStageMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
@@ -36,6 +37,7 @@ public class PipelineStageService {
 
     private final PipelineStageMapper stageMapper;
     private final com.aimanga.v2.repository.PipelineStageItemMapper itemMapper;
+    private final com.aimanga.v2.repository.ProjectMapper projectMapper;
 
     /** 标记阶段开始(UPSERT:不存在则创建,存在则更新为进行中) */
     public void markRunning(Long projectId, String stageType) {
@@ -83,6 +85,10 @@ public class PipelineStageService {
 
     /** 判断阶段是否处于暂停状态 */
     public boolean isStagePaused(Long projectId, String stageType) {
+        Project project = projectMapper.selectById(projectId);
+        if (project != null && Boolean.TRUE.equals(project.getPauseRequested())) {
+            return true;
+        }
         PipelineStage stage = stageMapper.selectOne(new LambdaQueryWrapper<PipelineStage>()
                 .eq(PipelineStage::getProjectId, projectId)
                 .eq(PipelineStage::getStageType, stageType));
@@ -98,6 +104,11 @@ public class PipelineStageService {
 
     /** 暂停项目的所有进行中阶段 */
     public void pauseProject(Long projectId) {
+        projectMapper.update(null, new LambdaUpdateWrapper<Project>()
+                .eq(Project::getId, projectId)
+                .set(Project::getPauseRequested, true)
+                .setSql("control_version = control_version + 1")
+                .set(Project::getUpdateTime, LocalDateTime.now()));
         stageMapper.update(null, new LambdaUpdateWrapper<PipelineStage>()
                 .eq(PipelineStage::getProjectId, projectId)
                 .eq(PipelineStage::getStatus, PipelineStage.STATUS_RUNNING)
@@ -118,6 +129,11 @@ public class PipelineStageService {
 
     /** 继续项目的暂停阶段(重置为排队,由恢复/链式入队重新启动) */
     public void resumeProject(Long projectId) {
+        projectMapper.update(null, new LambdaUpdateWrapper<Project>()
+                .eq(Project::getId, projectId)
+                .set(Project::getPauseRequested, false)
+                .setSql("control_version = control_version + 1")
+                .set(Project::getUpdateTime, LocalDateTime.now()));
         stageMapper.update(null, new LambdaUpdateWrapper<PipelineStage>()
                 .eq(PipelineStage::getProjectId, projectId)
                 .eq(PipelineStage::getStatus, PipelineStage.STATUS_PAUSED)

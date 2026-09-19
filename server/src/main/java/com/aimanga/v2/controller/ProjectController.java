@@ -44,6 +44,7 @@ public class ProjectController {
     private final ImportService importService;
     private final com.aimanga.v2.service.TaskService taskService;
     private final PipelineStageService stageService;
+    private final com.aimanga.v2.service.PipelineControlService pipelineControlService;
     private final GenerationPreflightService generationPreflightService;
     private final PageAssetBindingService pageAssetBindingService;
     private final com.aimanga.v2.pipeline.PublicationService publicationService;
@@ -112,7 +113,7 @@ public class ProjectController {
     @PostMapping("/{id}/pause")
     public Result<Void> pause(@PathVariable Long id) {
         projectService.requireAccessible(id);
-        stageService.pauseProject(id);
+        pipelineControlService.pauseProject(id);
         return Result.ok();
     }
 
@@ -124,22 +125,7 @@ public class ProjectController {
     @PostMapping("/{id}/resume")
     public Result<Integer> resume(@PathVariable Long id) {
         projectService.requireAccessible(id);
-        stageService.resumeProject(id);
-        // 恢复项目下所有 PAUSED 任务(原 Task 原继续)
-        List<TaskEntity> pausedTasks = taskService.list(new LambdaQueryWrapper<TaskEntity>()
-                .eq(TaskEntity::getProjectId, id)
-                .eq(TaskEntity::getStatus, TaskStatus.PAUSED)
-                .orderByAsc(TaskEntity::getId));
-        int resumed = 0;
-        for (TaskEntity task : pausedTasks) {
-            try {
-                taskService.resume(task.getId());
-                resumed++;
-            } catch (BusinessException e) {
-                log.warn("[project] 恢复任务 {} 失败: {}", task.getId(), e.getMessage());
-            }
-        }
-        return Result.ok(resumed);
+        return Result.ok(pipelineControlService.resumeProject(id));
     }
 
     /** 查询流水线各阶段进度 */

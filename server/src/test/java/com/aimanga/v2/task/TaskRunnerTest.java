@@ -28,6 +28,7 @@ class TaskRunnerTest {
     private TaskMapper mapper;
     private TaskEventPublisher publisher;
     private TaskHandler handler;
+    private TaskQueue taskQueue;
     private TaskRunner runner;
     private TaskEntity task;
 
@@ -36,11 +37,12 @@ class TaskRunnerTest {
         mapper = mock(TaskMapper.class);
         publisher = mock(TaskEventPublisher.class);
         handler = mock(TaskHandler.class);
+        taskQueue = mock(TaskQueue.class);
         when(handler.type()).thenReturn("MOCK");
         com.aimanga.v2.service.ConfigService configService = mock(com.aimanga.v2.service.ConfigService.class);
         when(configService.getInt(org.mockito.ArgumentMatchers.eq("task_lease_seconds"), org.mockito.ArgumentMatchers.anyInt()))
                 .thenReturn(90);
-        runner = new TaskRunner(mapper, publisher, List.of(handler), configService);
+        runner = new TaskRunner(mapper, publisher, List.of(handler), configService, taskQueue);
         task = new TaskEntity();
         task.setId(1L);
         task.setUserId(9L);
@@ -188,5 +190,18 @@ class TaskRunnerTest {
         assertThatThrownBy(runtime::checkStop)
                 .isInstanceOf(TaskStopSignal.class);
         verify(mapper, never()).selectById(any());
+    }
+
+    @Test
+    void runtimeRaisesPauseSignalWhenTaskOrProjectPauseIntentIsSet() {
+        TaskEntity owned = new TaskEntity();
+        owned.setId(1L);
+        owned.setClaimToken("worker-a");
+        when(mapper.isEffectivePauseRequested(1L, "worker-a")).thenReturn(true);
+
+        TaskRuntime runtime = new TaskRuntime(mapper, publisher, owned);
+
+        assertThatThrownBy(runtime::checkPauseRequested)
+                .isInstanceOf(TaskPauseSignal.class);
     }
 }

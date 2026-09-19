@@ -31,17 +31,19 @@ public class TaskRunner {
     private final TaskEventPublisher publisher;
     private final Map<String, TaskHandler> handlers;
     private final com.aimanga.v2.service.ConfigService configService;
+    private final TaskQueue taskQueue;
     private final java.util.concurrent.ScheduledExecutorService heartbeatScheduler;
 
     /** 本 JVM 实例 ID(Phase 8.4 多实例标识) */
     private static final String INSTANCE_ID = java.util.UUID.randomUUID().toString();
 
     public TaskRunner(TaskMapper taskMapper, TaskEventPublisher publisher, List<TaskHandler> handlerList,
-                      com.aimanga.v2.service.ConfigService configService) {
+                      com.aimanga.v2.service.ConfigService configService, TaskQueue taskQueue) {
         this.taskMapper = taskMapper;
         this.publisher = publisher;
         this.handlers = handlerList.stream().collect(Collectors.toMap(TaskHandler::type, Function.identity()));
         this.configService = configService;
+        this.taskQueue = taskQueue;
         int heartbeatThreads = Math.max(1, Math.min(8, configService.getInt("task_heartbeat_threads", 2)));
         this.heartbeatScheduler = java.util.concurrent.Executors.newScheduledThreadPool(heartbeatThreads, r -> {
             Thread t = new Thread(r, "task-heartbeat");
@@ -118,7 +120,12 @@ public class TaskRunner {
         }
         TaskEntity latest = taskMapper.selectById(task.getId());
         if (latest != null) {
-            publisher.publishStatus(latest, TaskStatus.PAUSED, "已暂停(进行中的请求已保存)");
+            if (latest.getStatus() != null && latest.getStatus() == TaskStatus.PENDING) {
+                taskQueue.enqueue(latest.getId());
+                publisher.publishStatus(latest, TaskStatus.PENDING, "暂停意图已取消,继续原任务");
+            } else {
+                publisher.publishStatus(latest, TaskStatus.PAUSED, "已暂停(进行中的请求已保存)");
+            }
         }
         log.info("[task] 任务已暂停 taskId={} progress={} success={}/{}",
                 task.getId(), runtime.progress(), runtime.successCount(), runtime.total());

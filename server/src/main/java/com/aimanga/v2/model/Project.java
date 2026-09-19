@@ -70,6 +70,12 @@ public class Project {
     /** 1连载中 2已完结 */
     private Integer seriesStatus;
 
+    /** 持久化暂停意图；内容生产状态不承载控制信号。 */
+    private Boolean pauseRequested;
+
+    /** 每次 pause/resume 递增，恢复时遵从最新控制意图。 */
+    private Long controlVersion;
+
     private LocalDateTime createTime;
 
     private LocalDateTime updateTime;

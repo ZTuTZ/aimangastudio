@@ -48,10 +48,16 @@ export function TaskMonitor() {
   });
 
   const act = useMutation({
-    mutationFn: ({ id, action }: { id: number; action: 'stop' | 'retry' | 'resume' }) =>
-      action === 'stop' ? tasksApi.stop(id) : action === 'resume' ? tasksApi.resume(id) : tasksApi.retry(id),
+    mutationFn: ({ id, action }: { id: number; action: 'stop' | 'pause' | 'retry' | 'resume' }) =>
+      action === 'stop' ? tasksApi.stop(id)
+        : action === 'pause' ? tasksApi.pause(id)
+          : action === 'resume' ? tasksApi.resume(id)
+            : tasksApi.retry(id),
     onSuccess: (_d, v) => {
-      message.success(v.action === 'stop' ? '已停止' : v.action === 'resume' ? '已恢复' : '已重新入队');
+      message.success(v.action === 'stop' ? '已停止'
+        : v.action === 'pause' ? '已请求暂停'
+          : v.action === 'resume' ? '已恢复'
+            : '已重新入队');
       queryClient.invalidateQueries({ queryKey: ['monitor-tasks'] });
       queryClient.invalidateQueries({ queryKey: ['monitor-overview'] });
       queryClient.invalidateQueries({ queryKey: ['monitor-active'] });
@@ -154,14 +160,23 @@ export function TaskMonitor() {
             { title: '用户', dataIndex: 'userId', width: 70 },
             { title: '作品', dataIndex: 'projectTitle', ellipsis: true },
             { title: '类型', dataIndex: 'taskType', width: 100, render: (t) => <Tag bordered={false}>{TASK_TYPE_LABELS[t] ?? t}</Tag> },
-            { title: '状态', dataIndex: 'status', width: 90, render: (s) => <Tag color={TASK_STATUS[s]?.color} bordered={false}>{TASK_STATUS[s]?.label ?? s}</Tag> },
+            {
+              title: '状态', dataIndex: 'status', width: 100,
+              render: (s, task) => <Tag color={TASK_STATUS[s]?.color} bordered={false}>
+                {task.pauseRequested && s === 1 ? '暂停中' : TASK_STATUS[s]?.label ?? s}
+              </Tag>,
+            },
             { title: '进度', width: 150, render: (_, t) => `${t.progress}% (${t.successCount}/${t.totalCount})` },
             { title: '重试', width: 60, render: (_, task) => task.retryCount },
             { title: '最后错误', ellipsis: true, render: (_, task) => task.lastError ? <Typography.Text type="danger" className="text-xs">{task.lastError}</Typography.Text> : '-' },
             {
-              title: '操作', width: 140,
+              title: '操作', width: 160,
               render: (_, t) => [0, 1, 6].includes(t.status)
-                ? <Button size="small" danger onClick={() => act.mutate({ id: t.id, action: 'stop' })}>停止</Button>
+                ? <Space size={0}>
+                    {t.status === 1 && !t.pauseRequested && <Button size="small" onClick={() => act.mutate({ id: t.id, action: 'pause' })}>暂停</Button>}
+                    {t.status === 1 && t.pauseRequested && <Button size="small" onClick={() => act.mutate({ id: t.id, action: 'resume' })}>取消暂停</Button>}
+                    <Button size="small" danger onClick={() => act.mutate({ id: t.id, action: 'stop' })}>停止</Button>
+                  </Space>
                 : t.status === 7
                   ? <Space size={0}><Button size="small" onClick={() => act.mutate({ id: t.id, action: 'resume' })}>继续</Button><Button size="small" danger onClick={() => act.mutate({ id: t.id, action: 'stop' })}>停止</Button></Space>
                   : <Button size="small" onClick={() => act.mutate({ id: t.id, action: 'retry' })}>重试</Button>,

@@ -29,6 +29,7 @@ export interface ProjectVO {
   updateTime: string;
   chapterCount: number;
   pageCount: number;
+  pauseRequested?: boolean;
 }
 
 /** 连载状态 */

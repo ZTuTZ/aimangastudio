@@ -56,4 +56,6 @@ public class ProjectVO {
     private Long chapterCount;
 
     private Long pageCount;
+
+    private Boolean pauseRequested;
 }

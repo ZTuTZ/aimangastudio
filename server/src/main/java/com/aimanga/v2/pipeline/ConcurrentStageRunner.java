@@ -147,8 +147,12 @@ public class ConcurrentStageRunner {
         while (true) {
             try {
                 runtime.checkStop();
+                runtime.checkPauseRequested();
             } catch (TaskStopSignal s) {
                 stopped.set(true);
+                break;
+            } catch (com.aimanga.v2.task.TaskPauseSignal p) {
+                paused.set(true);
                 break;
             }
             if (stageService.isStagePaused(projectId, stageType)) {
