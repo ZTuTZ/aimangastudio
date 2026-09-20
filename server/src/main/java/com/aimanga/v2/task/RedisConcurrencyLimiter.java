@@ -47,11 +47,11 @@ public class RedisConcurrencyLimiter {
     public String tryAcquire(String kind, String name, int max, long ttlMs) {
         String key = keyOf(kind, name);
         String token = UUID.randomUUID().toString();
-        String lua = "local tm=redis.call('TIME'); local now=tm[1]*1000+math.floor(tm[2]/1000); " +
+        String lua = "local tm=redis.call('TIME'); local now=tonumber(tm[1])*1000+math.floor(tonumber(tm[2])/1000); " +
                 "redis.call('ZREMRANGEBYSCORE',KEYS[1],'-inf',now); " +
                 "if redis.call('ZCARD',KEYS[1]) >= tonumber(ARGV[1]) then return 0 end; " +
                 "redis.call('ZADD',KEYS[1],now+tonumber(ARGV[2]),ARGV[3]); " +
-                "local desired=tonumber(ARGV[2])+60000; local current=redis.call('PTTL',KEYS[1]); " +
+                "local desired=tonumber(ARGV[2])+60000; local current=tonumber(redis.call('PTTL',KEYS[1])) or -1; " +
                 "if current < desired then redis.call('PEXPIRE',KEYS[1],desired) end; return 1";
         Number acquired = redissonClient.getScript().eval(RScript.Mode.READ_WRITE, lua,
                 RScript.ReturnType.INTEGER, List.of(key), max, ttlMs, token);
@@ -60,11 +60,11 @@ public class RedisConcurrencyLimiter {
 
     public boolean renew(String kind, String name, String permitToken, long ttlMs) {
         if (permitToken == null) return false;
-        String lua = "local tm=redis.call('TIME'); local now=tm[1]*1000+math.floor(tm[2]/1000); " +
+        String lua = "local tm=redis.call('TIME'); local now=tonumber(tm[1])*1000+math.floor(tonumber(tm[2])/1000); " +
                 "local score=redis.call('ZSCORE',KEYS[1],ARGV[1]); " +
                 "if (not score) or tonumber(score) <= now then return 0 end; " +
                 "redis.call('ZADD',KEYS[1],'XX',now+tonumber(ARGV[2]),ARGV[1]); " +
-                "local desired=tonumber(ARGV[2])+60000; local current=redis.call('PTTL',KEYS[1]); " +
+                "local desired=tonumber(ARGV[2])+60000; local current=tonumber(redis.call('PTTL',KEYS[1])) or -1; " +
                 "if current < desired then redis.call('PEXPIRE',KEYS[1],desired) end; return 1";
         Number renewed = redissonClient.getScript().eval(RScript.Mode.READ_WRITE, lua,
                 RScript.ReturnType.INTEGER, List.of(keyOf(kind, name)), permitToken, ttlMs);

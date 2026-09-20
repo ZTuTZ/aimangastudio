@@ -61,9 +61,12 @@ class InfrastructureIT {
     @Test
     void flywayUpgradesV803WithoutOverwritingOperatorConfiguration() throws Exception {
         String upgradeDb = "aimanga_upgrade";
-        try (var connection = DriverManager.getConnection(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
+        String rootUrl = MYSQL.getJdbcUrl().replace("/aimanga_v2", "/mysql");
+        String rootPassword = MYSQL.getEnvMap().get("MYSQL_ROOT_PASSWORD");
+        try (var connection = DriverManager.getConnection(rootUrl, "root", rootPassword);
              var statement = connection.createStatement()) {
             statement.execute("CREATE DATABASE IF NOT EXISTS " + upgradeDb + " CHARACTER SET utf8mb4");
+            statement.execute("GRANT ALL PRIVILEGES ON " + upgradeDb + ".* TO 'aimanga'@'%'");
         }
         String upgradeUrl = MYSQL.getJdbcUrl().replace("/aimanga_v2", "/" + upgradeDb);
         Flyway before = Flyway.configure()
