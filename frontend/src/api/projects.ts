@@ -68,6 +68,7 @@ export interface PageVO {
   scriptVersion?: number | null;
   layoutScriptVersion?: number | null;
   imageScriptVersion?: number | null;
+  imageRevision?: number | null;
   generateRecords?: string | null;
 }
 

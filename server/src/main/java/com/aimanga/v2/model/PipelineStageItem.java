@@ -51,6 +51,9 @@ public class PipelineStageItem {
     /** 领取本 Item 时 Task 的 claim token。 */
     private String ownerTaskClaimToken;
 
+    /** Fixed target that owns the current execution of this item. */
+    private Long planUnitId;
+
     /** 当前 attempt 领取时间 */
     private LocalDateTime claimedAt;
 

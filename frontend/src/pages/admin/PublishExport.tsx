@@ -4,8 +4,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { App } from 'antd';
 import { useState } from 'react';
 import { adminApi, type AdminProjectRow, type BatchExportReport } from '@/api/admin';
-import { http } from '@/api/http';
-import axios from 'axios';
+import { tasksApi, type TaskVO } from '@/api/tasks';
 
 const STATUS_META: Record<number, { label: string; color: string }> = {
   0: { label: '准备中', color: 'cyan' },
@@ -20,7 +19,7 @@ export function PublishExport() {
   const { message } = App.useApp();
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [report, setReport] = useState<BatchExportReport | null>(null);
-  const [exporting, setExporting] = useState(false);
+  const [exportTaskId, setExportTaskId] = useState<number | null>(null);
 
   const { data: projects, isLoading } = useQuery({
     queryKey: ['admin-projects'],
@@ -36,36 +35,39 @@ export function PublishExport() {
     onError: (e) => message.error(e instanceof Error ? e.message : '校验失败'),
   });
 
-  const download = async () => {
-    setExporting(true);
-    try {
-      // blob 下载(带鉴权 header,不能用 window.open)
-      const response = await http.post('/admin/export/batch', { projectIds: selectedIds }, {
-        responseType: 'blob',
-        timeout: 600000,
-      });
-      const blob = new Blob([response.data as unknown as BlobPart], { type: 'application/zip' });
+  const createExport = useMutation({
+    mutationFn: () => adminApi.createBatchExport(selectedIds),
+    onSuccess: (task) => {
+      setExportTaskId(task.id);
+      message.success(`导出任务 #${task.id} 已创建，可离开页面后稍后下载`);
+    },
+    onError: (e) => message.error(e instanceof Error ? e.message : '创建导出任务失败'),
+  });
+  const { data: exportTask } = useQuery({
+    queryKey: ['export-task', exportTaskId],
+    queryFn: () => tasksApi.get(exportTaskId!),
+    enabled: exportTaskId != null,
+    refetchInterval: (query) => {
+      const status = (query.state.data as TaskVO | undefined)?.status;
+      return status != null && [2, 3, 4, 5].includes(status) ? false : 2000;
+    },
+  });
+  const exportResult = parseExportResult(exportTask?.result);
+  const downloadExport = useMutation({
+    mutationFn: async () => {
+      if (!exportResult?.artifactId) throw new Error('导出产物不存在');
+      const blob = await adminApi.downloadBatchExport(exportResult.artifactId);
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `comic-batch-${Date.now()}.zip`;
-      a.click();
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `aimanga-export-${exportTaskId}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
       URL.revokeObjectURL(url);
-      message.success('批量导出包已下载(包内含 summary.json 结果清单)');
-    } catch (e) {
-      // blob 响应里的业务错误(JSON)解析为可读消息
-      let msg = e instanceof Error ? e.message : '导出失败';
-      if (axios.isAxiosError(e) && e.response?.data instanceof Blob) {
-        try {
-          const text = await e.response.data.text();
-          msg = JSON.parse(text).message ?? msg;
-        } catch { /* 保留原始消息 */ }
-      }
-      message.error(msg);
-    } finally {
-      setExporting(false);
-    }
-  };
+    },
+    onError: (e) => message.error(e instanceof Error ? e.message : '下载失败'),
+  });
 
   return (
     <div className="flex flex-col gap-4">
@@ -87,12 +89,34 @@ export function PublishExport() {
           type="primary"
           icon={<DownloadOutlined />}
           disabled={selectedIds.length === 0}
-          loading={exporting}
-          onClick={download}
+          loading={createExport.isPending || (exportTask != null && [0, 1, 6].includes(exportTask.status))}
+          onClick={() => createExport.mutate()}
         >
           批量导出({selectedIds.length})
         </Button>
       </div>
+
+      {exportTask && (
+        <Alert
+          type={exportTask.status === 2 ? 'success' : exportTask.status === 4 ? 'warning'
+            : exportTask.status === 3 ? 'error' : 'info'}
+          message={`导出任务 #${exportTask.id} · ${exportTask.progress ?? 0}%`}
+          description={
+            <div className="flex flex-col gap-2">
+              <span>成功 {exportResult?.success ?? exportTask.successCount ?? 0} 部，失败 {exportResult?.failed ?? exportTask.failCount ?? 0} 部</span>
+              {exportResult?.artifactId && exportTask.status != null && [2, 4].includes(exportTask.status) && (
+                <Button type="link" className="self-start p-0" loading={downloadExport.isPending}
+                  onClick={() => downloadExport.mutate()}>
+                  下载批量导出包（含 summary.json，有效期至 {exportResult.expiresAt ?? '未知'}）
+                </Button>
+              )}
+              {(exportResult?.items ?? []).filter((item) => !item.exported).map((item) => (
+                <Typography.Text type="danger" key={item.projectId}>作品 #{item.projectId}：{item.error ?? '导出失败'}</Typography.Text>
+              ))}
+            </div>
+          }
+        />
+      )}
 
       {report && (
         <Alert
@@ -132,6 +156,20 @@ export function PublishExport() {
       />
     </div>
   );
+}
+
+interface ExportResult {
+  artifactId?: number;
+  downloadUrl?: string;
+  expiresAt?: string;
+  success?: number;
+  failed?: number;
+  items?: Array<{ projectId: number; exported: boolean; error?: string }>;
+}
+
+export function parseExportResult(value: string | null | undefined): ExportResult | null {
+  if (!value) return null;
+  try { return JSON.parse(value) as ExportResult; } catch { return null; }
 }
 
 function CardTitle() {

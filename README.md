@@ -34,7 +34,7 @@ server/                        后端(Spring Boot, 端口 8090)
       split/                   滚动分包拆话规划
     ai/                        AI 双协议客户端与限流
     controller/ service/ dto/ model/ repository/
-  sql/                         schema.sql(全量表结构) + seed.sql(配置种子)
+  sql/                         schema.sql/seed.sql(人工参考，正式变更走Flyway)
   src/test/                    单元测试 + comic-text-layer-v1 fixtures
 frontend/                      前端(React, 端口 5173)
 docs/                          各 Phase 执行文档与迁移 SQL
@@ -44,12 +44,14 @@ docs/                          各 Phase 执行文档与迁移 SQL
 
 ### 1. 数据库
 
-```sql
-CREATE DATABASE aimanga_v2 DEFAULT CHARSET utf8mb4;
--- 依次执行
-server/sql/schema.sql   -- 全量表结构(累积)
-server/sql/seed.sql     -- 系统配置种子
+```bash
+# 先创建空库并配置 DB_HOST、DB_PORT、DB_NAME、DB_USERNAME、DB_PASSWORD。
+# 后端启动时 Flyway 会按 server/src/main/resources/db/migration 自动建表和升级。
+cd server
+mvn spring-boot:run
 ```
+
+`server/sql/schema.sql` 与 `server/sql/seed.sql` 仅用于结构和默认值参考，正式升级不要手工修改或重放历史迁移。
 
 ### 2. 后端
 
@@ -88,6 +90,9 @@ npm run dev        # http://localhost:5173,/api 代理到 8090
 | `feature_auto_split / feature_auto_asset` | 1 | 自动拆话/提取开关 |
 | `feature_auto_sheet` | 0 | 自动生成全部设定表(默认关闭,素材由用户勾选) |
 
+生产环境还应核对任务租约、心跳、执行时限、导出配额和 AI 超时。完整配置及升级步骤见
+[`docs/Phase8_生产部署与迁移说明_2026-09-20.md`](docs/Phase8_生产部署与迁移说明_2026-09-20.md)。
+
 ## 导出协议
 
 | 协议 | 用途 |
@@ -101,3 +106,4 @@ npm run dev        # http://localhost:5173,/api 代理到 8090
 
 - 各阶段执行文档与迁移 SQL 见 `docs/`
 - 端到端人工验收清单见 `docs/AIManga_v2_Phase7.7_端到端验收清单.md`
+- Phase 8 生产部署、旧任务过渡和回滚说明见 `docs/Phase8_生产部署与迁移说明_2026-09-20.md`

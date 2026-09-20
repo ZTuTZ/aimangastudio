@@ -7,6 +7,11 @@ package com.aimanga.v2.pipeline;
 public record StageItemExecution(
         com.aimanga.v2.model.PipelineStageItem item,
         String attemptToken,
-        com.aimanga.v2.task.TaskExecutionOwner taskOwner
+        com.aimanga.v2.task.TaskExecutionOwner taskOwner,
+        Long planUnitId
 ) {
+    public StageItemExecution(com.aimanga.v2.model.PipelineStageItem item, String attemptToken,
+                              com.aimanga.v2.task.TaskExecutionOwner taskOwner) {
+        this(item, attemptToken, taskOwner, null);
+    }
 }

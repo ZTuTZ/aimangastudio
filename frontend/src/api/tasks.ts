@@ -39,6 +39,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   COLORIZE: '上色',
   CLEAN: '清晰化',
   REPAINT: '局部重绘',
+  EXPORT: '批量导出',
   MOCK: '系统测试',
 };
 

@@ -18,6 +18,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -57,6 +59,7 @@ public class PublicationService {
     private final PageTextElementMapper pageTextElementMapper;
     private final ObjectMapper objectMapper;
     private final RemoteImageFetcher remoteImageFetcher;
+    private final PlatformTransactionManager transactionManager;
 
     // ---------- T7.3 校验 ----------
 
@@ -75,6 +78,12 @@ public class PublicationService {
             throw new BusinessException(404, "作品不存在: " + projectId);
         }
         List<ValidationIssue> issues = new ArrayList<>();
+        List<PageTextElement> allTextElements = pageTextElementMapper.selectList(
+                new LambdaQueryWrapper<PageTextElement>().eq(PageTextElement::getProjectId, projectId));
+        Map<Long, List<PageTextElement>> textByPage = new LinkedHashMap<>();
+        for (PageTextElement element : allTextElements) {
+            textByPage.computeIfAbsent(element.getPageId(), ignored -> new ArrayList<>()).add(element);
+        }
 
         // Comic 层
         if (isBlank(project.getTitle())) issues.add(new ValidationIssue("ERROR", "作品标题为空"));
@@ -121,10 +130,20 @@ public class PublicationService {
                             "第 " + chapter.getChapterNo() + " 话页号不连续:期望 " + expectedPageNo + ",实际 " + no));
                 }
                 expectedPageNo = Math.max(expectedPageNo, no) + 1;
-                if (page.getGenerateStatus() == null || page.getGenerateStatus() != PageEntity.GEN_SUCCESS
-                        || isBlank(page.getGeneratedImageUrl())) {
+                if (!PageReadiness.hasCurrentImage(page)) {
                     issues.add(new ValidationIssue("ERROR",
-                            "第 " + chapter.getChapterNo() + " 话第 " + no + " 页成品图未就绪"));
+                            "第 " + chapter.getChapterNo() + " 话第 " + no + " 页成品图未就绪或已过期"));
+                }
+                if (PageReadiness.hasText(page)) {
+                    List<PageTextElement> layer = textByPage.getOrDefault(page.getId(), List.of());
+                    if (page.getScriptVersion() == null || page.getTextLayoutVersion() == null
+                            || !page.getScriptVersion().equals(page.getTextLayoutVersion())) {
+                        issues.add(new ValidationIssue("ERROR", "第 " + chapter.getChapterNo() + " 话第 " + no
+                                + " 页文本层已过期,请同步后发布"));
+                    } else if (layer.isEmpty() || !textLayerCoversBody(page, layer)) {
+                        issues.add(new ValidationIssue("ERROR", "第 " + chapter.getChapterNo() + " 话第 " + no
+                                + " 页文本层未覆盖当前对白/旁白"));
+                    }
                 }
                 pageTotal++;
             }
@@ -140,6 +159,17 @@ public class PublicationService {
 
     /** 校验通过后构建 manifest 并流式写 ZIP(Phase 8.8:不在内存中持有全量 byte[]) */
     public ComicManifest buildManifest(Long projectId) {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setReadOnly(true);
+        return template.execute(status -> buildManifestInternal(projectId));
+    }
+
+    /** Write a previously captured immutable publication snapshot. */
+    public void writeZip(ComicManifest snapshot, java.io.OutputStream out) {
+        writeSnapshotZip(snapshot, out);
+    }
+
+    private ComicManifest buildManifestInternal(Long projectId) {
         PublicationReport report = validateInternal(projectId);
         if (!report.valid()) {
             String firstError = report.issues().stream()
@@ -166,8 +196,7 @@ public class PublicationService {
                     .orderByAsc(PageEntity::getPageNo));
             List<ComicManifestPage> manifestPages = new ArrayList<>();
             for (PageEntity page : pages) {
-                if (page.getGenerateStatus() == null || page.getGenerateStatus() != PageEntity.GEN_SUCCESS
-                        || isBlank(page.getGeneratedImageUrl())) {
+                if (!PageReadiness.hasCurrentImage(page)) {
                     continue;
                 }
                 List<PageTextElement> layer = textByPage.get(page.getId());
@@ -200,7 +229,8 @@ public class PublicationService {
                 manifestPages.add(new ComicManifestPage(page.getPageNo(),
                         page.getGeneratedImageUrl(),
                         filePathOf(chapter.getChapterNo(), page.getPageNo(), page.getGeneratedImageUrl()),
-                        textLayer));
+                        textLayer, parseDialogue(page.getDialogue()), page.getNarration(), page.getScriptVersion(),
+                        page.getImageScriptVersion(), page.getTextLayoutVersion()));
             }
             manifestChapters.add(new ComicManifestChapter(chapter.getChapterNo(), chapter.getTitle(), manifestPages));
         }
@@ -222,8 +252,31 @@ public class PublicationService {
 
     /** Phase 8.8 §10.1:流式写 ZIP —— 图片通过 RemoteImageFetcher 流式拉取,内存仅当前缓冲块 */
     public void writeZip(Long projectId, java.io.OutputStream out) {
-        ComicManifest manifest = buildManifest(projectId);
-        try (ZipOutputStream zip = new ZipOutputStream(out)) {
+        ComicManifest snapshot = buildManifest(projectId);
+        writeSnapshotZip(snapshot, out);
+    }
+
+    private void writeSnapshotZip(ComicManifest snapshot, java.io.OutputStream out) {
+        java.nio.file.Path tempDir = null;
+        try {
+            tempDir = java.nio.file.Files.createTempDirectory("aimanga-export-");
+            Map<String, java.nio.file.Path> downloaded = new LinkedHashMap<>();
+            Map<String, String> extensions = new LinkedHashMap<>();
+            for (ComicManifestChapter chapter : snapshot.chapters()) {
+                for (ComicManifestPage page : chapter.pages()) {
+                    String key = chapter.chapterNo() + ":" + page.pageNo();
+                    try (RemoteImageFetcher.FetchResult fetch = remoteImageFetcher.fetchStream(page.imageUrl());
+                         InputStream in = fetch.inputStream()) {
+                        String ext = extensionForMime(fetch.mime());
+                        java.nio.file.Path file = tempDir.resolve("page-" + chapter.chapterNo() + "-" + page.pageNo() + "." + ext);
+                        java.nio.file.Files.copy(in, file);
+                        downloaded.put(key, file);
+                        extensions.put(key, ext);
+                    }
+                }
+            }
+            ComicManifest manifest = withResolvedPaths(snapshot, extensions);
+            try (ZipOutputStream zip = new ZipOutputStream(out)) {
             zip.putNextEntry(new ZipEntry("manifest.json"));
             zip.write(objectMapper.writerWithDefaultPrettyPrinter()
                     .writeValueAsString(manifest).getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -232,22 +285,80 @@ public class PublicationService {
             for (ComicManifestChapter chapter : manifest.chapters()) {
                 for (ComicManifestPage page : chapter.pages()) {
                     zip.putNextEntry(new ZipEntry(page.filePath()));
-                    try (RemoteImageFetcher.FetchResult fetch = remoteImageFetcher.fetchStream(page.imageUrl());
-                         InputStream in = fetch.inputStream()) {
-                        in.transferTo(zip);
-                    }
+                    java.nio.file.Files.copy(downloaded.get(chapter.chapterNo() + ":" + page.pageNo()), zip);
                     zip.closeEntry();
                     pages++;
                 }
             }
             zip.finish();
-            log.info("[export] 作品 {} 流式导出完成: {} 话 / {} 页", projectId,
+            log.info("[export] 作品 {} 流式导出完成: {} 话 / {} 页", snapshot.contentUid(),
                     manifest.chapters().size(), pages);
+            }
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
             throw new BusinessException(500, "导出打包失败: " + e.getMessage());
+        } finally {
+            if (tempDir != null) {
+                try (var paths = java.nio.file.Files.walk(tempDir)) {
+                    paths.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
+                        try { java.nio.file.Files.deleteIfExists(path); } catch (Exception ignored) { }
+                    });
+                } catch (Exception ignored) { }
+            }
         }
+    }
+
+    private boolean textLayerCoversBody(PageEntity page, List<PageTextElement> layer) {
+        List<String> expected = new ArrayList<>();
+        if (!isBlank(page.getNarration())) expected.add(page.getNarration().trim());
+        JsonNode dialogue = parseDialogue(page.getDialogue());
+        if (dialogue.isArray()) {
+            dialogue.forEach(item -> {
+                String line = item.path("line").asText("").trim();
+                if (!line.isBlank()) expected.add(line);
+            });
+        }
+        List<String> actual = layer.stream().map(PageTextElement::getTextContent)
+                .filter(text -> text != null && !text.isBlank()).map(String::trim).toList();
+        return !expected.isEmpty() && expected.stream().allMatch(actual::contains);
+    }
+
+    private JsonNode parseDialogue(String json) {
+        try {
+            JsonNode node = objectMapper.readTree(isBlank(json) ? "[]" : json);
+            return node.isArray() ? node : objectMapper.createArrayNode();
+        } catch (Exception e) {
+            return objectMapper.createArrayNode();
+        }
+    }
+
+    private ComicManifest withResolvedPaths(ComicManifest source, Map<String, String> extensions) {
+        List<ComicManifestChapter> chapters = new ArrayList<>();
+        for (ComicManifestChapter chapter : source.chapters()) {
+            List<ComicManifestPage> pages = new ArrayList<>();
+            for (ComicManifestPage page : chapter.pages()) {
+                String ext = extensions.get(chapter.chapterNo() + ":" + page.pageNo());
+                pages.add(new ComicManifestPage(page.pageNo(), page.imageUrl(),
+                        filePathOf(chapter.chapterNo(), page.pageNo(), ext), page.textLayer(), page.dialogue(),
+                        page.narration(), page.scriptVersion(), page.imageScriptVersion(), page.textLayoutVersion()));
+            }
+            chapters.add(new ComicManifestChapter(chapter.chapterNo(), chapter.title(), pages));
+        }
+        return new ComicManifest(source.schemaVersion(), source.contentUid(), source.title(), source.tagline(),
+                source.description(), source.coverUrl(), source.category(), source.tags(), source.seriesStatus(),
+                source.aspectRatio(), source.colorMode(), source.complete(), chapters);
+    }
+
+    private static String extensionForMime(String mime) {
+        return switch (mime == null ? "" : mime.toLowerCase()) {
+            case "image/png" -> "png";
+            case "image/jpeg" -> "jpg";
+            case "image/webp" -> "webp";
+            case "image/gif" -> "gif";
+            case "image/avif" -> "avif";
+            default -> throw new BusinessException(502, "不支持的图片 MIME: " + mime);
+        };
     }
 
     private static String safeStr(String s) {
@@ -258,8 +369,19 @@ public class PublicationService {
         return v == null ? 0.0 : v;
     }
 
-    private static String filePathOf(int chapterNo, int pageNo, String url) {
-        String ext = url.toLowerCase().endsWith(".png") ? "png" : "jpg";
+    private static String filePathOf(int chapterNo, int pageNo, String urlOrExtension) {
+        String value = urlOrExtension == null ? "" : urlOrExtension.toLowerCase();
+        String ext;
+        if (List.of("png", "jpg", "jpeg", "webp", "gif", "avif").contains(value)) {
+            ext = "jpeg".equals(value) ? "jpg" : value;
+        } else {
+            String path;
+            try { path = URI.create(value).getPath(); } catch (Exception e) { path = ""; }
+            int dot = path.lastIndexOf('.');
+            String candidate = dot < 0 ? "" : path.substring(dot + 1).toLowerCase();
+            ext = List.of("png", "jpg", "jpeg", "webp", "gif", "avif").contains(candidate)
+                    ? ("jpeg".equals(candidate) ? "jpg" : candidate) : "jpg";
+        }
         return "第" + chapterNo + "话/第" + pageNo + "页." + ext;
     }
 

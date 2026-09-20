@@ -20,4 +20,16 @@ public class ComicPageEntity {
     private String imageUrl;
 
     private String filePath;
+
+    private String dialogue;
+
+    private String narration;
+
+    private String textLayer;
+
+    private Integer scriptVersion;
+
+    private Integer imageScriptVersion;
+
+    private Integer textLayoutVersion;
 }

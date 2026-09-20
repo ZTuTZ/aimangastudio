@@ -2,6 +2,7 @@ package com.aimanga.v2.pipeline;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import com.aimanga.v2.service.TaskPlanningService;
 
 /** 局部重绘任务(Phase 6.6 T6.6.3):原图+遮罩+重绘提示词,merge 通道 */
 @Slf4j
@@ -10,8 +11,8 @@ public class RepaintTaskHandler extends PostProcessTaskHandler {
 
     public RepaintTaskHandler(PipelineContext ctx, PostProcessService postProcessService,
                                PipelineStageService stageService, ConcurrentStageRunner stageRunner,
-                               StageItemCommitService commitService) {
-        super(ctx, postProcessService, stageService, stageRunner, commitService);
+                               StageItemCommitService commitService, TaskPlanningService taskPlanningService) {
+        super(ctx, postProcessService, stageService, stageRunner, commitService, taskPlanningService);
     }
 
     @Override

@@ -9,6 +9,7 @@ import com.aimanga.v2.model.Project;
 import com.aimanga.v2.model.TaskEntity;
 import com.aimanga.v2.task.TaskHandler;
 import com.aimanga.v2.task.TaskRuntime;
+import com.aimanga.v2.service.TaskPlanningService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
@@ -44,6 +45,7 @@ public class BatchTaskHandler implements TaskHandler {
     private final StageItemCommitService commitService;
     private final GenerationRecordService generationRecordService;
     private final ProjectCompletionService projectCompletionService;
+    private final TaskPlanningService taskPlanningService;
 
     @Override
     public String type() {
@@ -70,6 +72,7 @@ public class BatchTaskHandler implements TaskHandler {
         boolean skipGenerated = payload.path("skipGenerated").asBoolean(true);
         boolean forceLayout = payload.path("forceLayout").asBoolean(false);
         boolean forceImage = payload.path("forceImage").asBoolean(false);
+        boolean planned = taskPlanningService.hasPlan(task);
 
         List<PageEntity> pages = targetPages(project.getId(), chapterId, chapterIds);
 
@@ -104,29 +107,31 @@ public class BatchTaskHandler implements TaskHandler {
 
         // page_direct_output=1:直接出成品,跳过布局阶段(配置开关,热生效)
         boolean directOutput = ctx.configService.getInt("page_direct_output", 0) == 1;
-        int layoutSteps = directOutput ? 0 : pages.size();
-        int totalSteps = layoutSteps + (int) pages.stream()
-                .filter(p -> forceImage || !skipGenerated || staleOrMissing(p))
-                .count();
+        List<Long> layoutTargetIds = planned
+                ? taskPlanningService.targetIds(task, PipelineStageService.STAGE_LAYOUT, BUSINESS_TYPE_PAGE)
+                : directOutput ? List.of() : pages.stream().map(PageEntity::getId).toList();
+        List<Long> imageTargetIds = planned
+                ? taskPlanningService.targetIds(task, PipelineStageService.STAGE_IMAGE, BUSINESS_TYPE_PAGE)
+                : pages.stream().filter(p -> forceImage || !skipGenerated || staleOrMissing(p))
+                        .map(PageEntity::getId).toList();
+        int totalSteps = layoutTargetIds.size() + imageTargetIds.size();
         runtime.begin(Math.max(1, totalSteps));
 
-        // Phase 8.2:scoped run —— 单话/多话 BATCH 只允许执行目标页的 Item
-        StageRunScope pageScope = scopedScope
-                ? StageRunScope.pages(pages.stream().map(PageEntity::getId).toList())
-                : StageRunScope.all();
-
         // ===== 阶段一:LAYOUT(T6.3.4;直接出图模式整段跳过) =====
-        if (!directOutput) {
+        if (!layoutTargetIds.isEmpty()) {
             stageService.markRunning(project.getId(), PipelineStageService.STAGE_LAYOUT);
-            syncLayoutItems(project.getId(), pages, forceLayout, projectWide);
-            stageRunner.run(project.getId(), PipelineStageService.STAGE_LAYOUT, pageScope, runtime,
+            if (!planned) syncLayoutItems(project.getId(), pages, forceLayout, projectWide);
+            stageRunner.run(project.getId(), PipelineStageService.STAGE_LAYOUT,
+                    StageRunScope.pages(layoutTargetIds), runtime,
                     execution -> {
                         PipelineStageItem item = execution.item();
                         PageEntity page = pageOf(item.getBusinessId());
+                        TaskPlanningService.PlannedPageInput input = taskPlanningService.requireCurrentPageInput(
+                                execution.planUnitId(), page, false);
                         LayoutGenerationService.LayoutResult result = layoutGenerationService.processPage(
                                 project, page, PipelineStageService.isForceRequested(item));
                         var commit = commitService.commitFenced(execution, () -> {
-                            layoutGenerationService.applyLayoutResult(page.getId(), page.getScriptVersion(), result);
+                            layoutGenerationService.applyLayoutResult(page.getId(), input.scriptVersion(), result);
                             generationRecordService.record(project.getId(), page.getChapterId(), page.getId(), task.getId(),
                                     GenerationRecord.KIND_LAYOUT, ctx.configService.getString("ai_image_model"),
                                     result.prompt(), result.refUrls(), null, result.url(),
@@ -141,13 +146,16 @@ public class BatchTaskHandler implements TaskHandler {
         }
 
         // ===== 阶段二:IMAGE(成品页并发) =====
-        stageService.markRunning(project.getId(), PipelineStageService.STAGE_IMAGE);
         List<PageEntity> pagesAfterLayout = targetPages(project.getId(), chapterId, chapterIds);
-        syncImageItems(project.getId(), pagesAfterLayout, skipGenerated, forceImage, projectWide);
-        stageRunner.run(project.getId(), PipelineStageService.STAGE_IMAGE, pageScope, runtime,
+        if (!imageTargetIds.isEmpty()) {
+        stageService.markRunning(project.getId(), PipelineStageService.STAGE_IMAGE);
+        if (!planned) syncImageItems(project.getId(), pagesAfterLayout, skipGenerated, forceImage, projectWide);
+        stageRunner.run(project.getId(), PipelineStageService.STAGE_IMAGE, StageRunScope.pages(imageTargetIds), runtime,
                 execution -> {
                     PipelineStageItem item = execution.item();
                     PageEntity page = pageOf(item.getBusinessId());
+                    TaskPlanningService.PlannedPageInput input = taskPlanningService.requireCurrentPageInput(
+                            execution.planUnitId(), page, true);
                     if (!commitService.runWhileOwned(execution, () -> pageGenerationService.markPageRunning(page.getId()))) {
                         throw new StaleCommitRejectedException(item.getId());
                     }
@@ -156,7 +164,8 @@ public class BatchTaskHandler implements TaskHandler {
                                 project, page, colorMode, PipelineStageService.isForceRequested(item));
                         var commit = commitService.commitFenced(execution, () -> {
                             String ref = pageGenerationService.applyPageImageResult(
-                                    page.getId(), page.getScriptVersion(), result, page.getGenerateRecords());
+                                    page.getId(), input.scriptVersion(), input.imageRevision(), result,
+                                    page.getGenerateRecords());
                             generationRecordService.record(project.getId(), page.getChapterId(), page.getId(), task.getId(),
                                     GenerationRecord.KIND_PAGE, ctx.configService.getString("ai_image_model"),
                                     result.prompt(), result.images(), result.inputUrl(), result.url(),
@@ -167,7 +176,7 @@ public class BatchTaskHandler implements TaskHandler {
                             throw new StaleCommitRejectedException(item.getId());
                         }
                         return commit.resultRef();
-                    } catch (StaleCommitRejectedException e) {
+                    } catch (StaleCommitRejectedException | ContentVersionConflictException e) {
                         throw e;
                     } catch (RuntimeException e) {
                         String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
@@ -176,6 +185,9 @@ public class BatchTaskHandler implements TaskHandler {
                         throw e;
                     }
                 }, stageRunner.imageEngine());
+        } else {
+            stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_IMAGE);
+        }
 
         // ===== 汇总(T6.3.7 + Phase 8.2:整部重算项目状态,修复 P0-3) =====
         summarize(project, pagesAfterLayout, projectWide, directOutput);

@@ -87,4 +87,11 @@ public class TaskEntity {
     private Boolean pauseRequested;
 
     private Long controlVersion;
+
+    /** Server-owned immutable execution plan metadata. */
+    private Integer planVersion;
+
+    private LocalDateTime planInitializedAt;
+
+    private String planSnapshot;
 }

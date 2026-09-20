@@ -54,6 +54,8 @@ class ProjectCompletionServiceTest {
         p.setPageNo((int) id);
         p.setGenerateStatus(status);
         p.setGeneratedImageUrl(url);
+        p.setScriptVersion(1);
+        p.setImageScriptVersion(status == PageEntity.GEN_SUCCESS ? 1 : 0);
         return p;
     }
 
@@ -96,9 +98,9 @@ class ProjectCompletionServiceTest {
 
         service.recalculateProject(100L);
 
-        // 项目不能标 DONE:已是 GENERATING 且重算仍为 GENERATING → 不写终态
-        org.mockito.Mockito.verify(projectMapper, org.mockito.Mockito.never())
-                .updateById(org.mockito.ArgumentMatchers.any(Project.class));
+        ArgumentCaptor<Project> captor = ArgumentCaptor.forClass(Project.class);
+        verify(projectMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(Project.STATUS_READY);
     }
 
     @Test

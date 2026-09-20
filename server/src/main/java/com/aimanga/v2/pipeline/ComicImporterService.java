@@ -89,6 +89,12 @@ public class ComicImporterService {
                     pageEntity.setPageNo(page.pageNo());
                     pageEntity.setImageUrl(page.imageUrl());
                     pageEntity.setFilePath(page.filePath());
+                    pageEntity.setDialogue(page.dialogue() == null ? "[]" : page.dialogue().toString());
+                    pageEntity.setNarration(page.narration());
+                    pageEntity.setTextLayer(page.textLayer() == null ? null : toJsonObject(page.textLayer()));
+                    pageEntity.setScriptVersion(page.scriptVersion());
+                    pageEntity.setImageScriptVersion(page.imageScriptVersion());
+                    pageEntity.setTextLayoutVersion(page.textLayoutVersion());
                     pageMapper.insert(pageEntity);
                     pageCount++;
                 }
@@ -106,6 +112,14 @@ public class ComicImporterService {
             return objectMapper.writeValueAsString(tags == null ? java.util.List.of() : tags);
         } catch (Exception e) {
             return "[]";
+        }
+    }
+
+    private String toJsonObject(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("manifest 文本层解析失败: " + e.getMessage());
         }
     }
 }

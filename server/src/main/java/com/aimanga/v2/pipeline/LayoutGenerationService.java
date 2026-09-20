@@ -55,12 +55,9 @@ public class LayoutGenerationService {
 
     /** 布局业务写入(fenced commit 事务内调用) */
     public void applyLayoutResult(Long pageId, Integer scriptVersion, LayoutResult result) {
-        PageEntity patch = new PageEntity();
-        patch.setId(pageId);
-        patch.setLayoutImageUrl(result.url());
-        patch.setLayoutScriptVersion(orOne(scriptVersion));
-        patch.setUpdateTime(java.time.LocalDateTime.now());
-        pageMapper.updateById(patch);
+        if (pageMapper.applyLayoutIfCurrent(pageId, orOne(scriptVersion), result.url()) != 1) {
+            throw new ContentVersionConflictException("页面脚本已变化,布局结果已拒绝");
+        }
     }
 
     private static int orOne(Integer version) {

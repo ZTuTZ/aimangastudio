@@ -45,7 +45,10 @@ public class ChapterController {
     @PostMapping("/chapters/{id}/regenerate-script")
     public Result<com.aimanga.v2.dto.TaskVO> regenerateScript(@PathVariable Long id) {
         Chapter chapter = chapterService.requireAccessible(id);
+        com.fasterxml.jackson.databind.node.ObjectNode payload = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        payload.put("chapterId", id);
+        payload.put("forceScript", true);
         return Result.ok(taskService.create(
-                new com.aimanga.v2.dto.CreateTaskRequest(chapter.getProjectId(), chapter.getId(), "SCRIPT", null)));
+                new com.aimanga.v2.dto.CreateTaskRequest(chapter.getProjectId(), chapter.getId(), "SCRIPT", payload)));
     }
 }

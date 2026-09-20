@@ -4,6 +4,7 @@ import com.aimanga.v2.service.ConfigService;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RScoredSortedSet;
 import org.redisson.api.RedissonClient;
+import org.redisson.api.RScript;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -45,22 +46,29 @@ public class RedisConcurrencyLimiter {
      */
     public String tryAcquire(String kind, String name, int max, long ttlMs) {
         String key = keyOf(kind, name);
-        long now = System.currentTimeMillis();
-        RScoredSortedSet<String> zset = redissonClient.getScoredSortedSet(key);
-        // 1. 清理过期 token
-        zset.removeRangeByScore(0, true, now, false);
-        // 2. used < max 才 ZADD(ZADD 后再校验一次,避免并发超发)
-        if (zset.size() >= max) {
-            return null;
-        }
         String token = UUID.randomUUID().toString();
-        zset.add(now + ttlMs, token);
-        if (zset.size() > max) {
-            // 超发(并发竞争):移除自己,拒绝
-            zset.remove(token);
-            return null;
-        }
-        return token;
+        String lua = "local tm=redis.call('TIME'); local now=tm[1]*1000+math.floor(tm[2]/1000); " +
+                "redis.call('ZREMRANGEBYSCORE',KEYS[1],'-inf',now); " +
+                "if redis.call('ZCARD',KEYS[1]) >= tonumber(ARGV[1]) then return 0 end; " +
+                "redis.call('ZADD',KEYS[1],now+tonumber(ARGV[2]),ARGV[3]); " +
+                "local desired=tonumber(ARGV[2])+60000; local current=redis.call('PTTL',KEYS[1]); " +
+                "if current < desired then redis.call('PEXPIRE',KEYS[1],desired) end; return 1";
+        Number acquired = redissonClient.getScript().eval(RScript.Mode.READ_WRITE, lua,
+                RScript.ReturnType.INTEGER, List.of(key), max, ttlMs, token);
+        return acquired != null && acquired.longValue() == 1L ? token : null;
+    }
+
+    public boolean renew(String kind, String name, String permitToken, long ttlMs) {
+        if (permitToken == null) return false;
+        String lua = "local tm=redis.call('TIME'); local now=tm[1]*1000+math.floor(tm[2]/1000); " +
+                "local score=redis.call('ZSCORE',KEYS[1],ARGV[1]); " +
+                "if (not score) or tonumber(score) <= now then return 0 end; " +
+                "redis.call('ZADD',KEYS[1],'XX',now+tonumber(ARGV[2]),ARGV[1]); " +
+                "local desired=tonumber(ARGV[2])+60000; local current=redis.call('PTTL',KEYS[1]); " +
+                "if current < desired then redis.call('PEXPIRE',KEYS[1],desired) end; return 1";
+        Number renewed = redissonClient.getScript().eval(RScript.Mode.READ_WRITE, lua,
+                RScript.ReturnType.INTEGER, List.of(keyOf(kind, name)), permitToken, ttlMs);
+        return renewed != null && renewed.longValue() == 1L;
     }
 
     /** 阻塞获取许可(每 200ms 重试,超时返回 null) */
@@ -92,9 +100,17 @@ public class RedisConcurrencyLimiter {
     /** 用户并发许可(层②):覆盖任务最长执行时限并留出清理余量，避免长任务许可中途过期。 */
     public String tryAcquireUser(long userId) {
         int max = Math.max(1, configService.getInt("task_user_concurrency", 2));
-        long ttl = Math.max(Duration.ofMinutes(10).toMillis(),
-                configService.getInt("task_max_execution_seconds", 1800) * 1000L + 120_000L);
+        long ttl = userPermitTtlMs();
         return tryAcquire("user", String.valueOf(userId), max, ttl);
+    }
+
+    public boolean renewUser(long userId, String permitToken) {
+        return renew("user", String.valueOf(userId), permitToken, userPermitTtlMs());
+    }
+
+    private long userPermitTtlMs() {
+        return Math.max(Duration.ofSeconds(30).toMillis(),
+                configService.getInt("task_permit_ttl_seconds", 120) * 1000L);
     }
 
     public void releaseUser(long userId, String permitToken) {
@@ -127,7 +143,7 @@ public class RedisConcurrencyLimiter {
             RScoredSortedSet<String> zset = redissonClient.getScoredSortedSet(keyOf("ai", channel));
             zset.removeRangeByScore(0, true, System.currentTimeMillis(), false);
             int used = zset.size();
-            result.put(channel, new int[]{Math.min(used, total), total});
+            result.put(channel, new int[]{used, total});
         }
         return result;
     }

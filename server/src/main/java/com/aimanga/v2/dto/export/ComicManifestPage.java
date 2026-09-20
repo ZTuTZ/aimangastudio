@@ -2,6 +2,7 @@ package com.aimanga.v2.dto.export;
 
 import java.util.List;
 import java.util.Map;
+import com.fasterxml.jackson.databind.JsonNode;
 
 /**
  * manifest 页节点:仅含 generate_status=2 且 generated_image_url 非空的正式成品页。
@@ -12,7 +13,12 @@ public record ComicManifestPage(
         Integer pageNo,
         String imageUrl,
         String filePath,
-        TextLayer textLayer) {
+        TextLayer textLayer,
+        JsonNode dialogue,
+        String narration,
+        Integer scriptVersion,
+        Integer imageScriptVersion,
+        Integer textLayoutVersion) {
 
     public record TextLayer(String schemaVersion, List<Map<String, Object>> elements) {
     }

@@ -24,6 +24,7 @@ class TaskMapperRegistrationTest {
 
         assertThat(sql).contains("pause_requested = 0");
         assertThat(sql).contains("project");
+        assertThat(sql).contains("plan_initialized_at is not null");
     }
 
     @Test
@@ -62,5 +63,28 @@ class TaskMapperRegistrationTest {
                 .contains("not exists")
                 .contains("project")
                 .contains("pause_requested = 1");
+    }
+
+    @Test
+    void permitLossRevokesTheExactTaskClaimBeforeRequeue() throws Exception {
+        Update update = TaskMapper.class
+                .getMethod("requeueAfterPermitLoss", Long.class, String.class, String.class)
+                .getAnnotation(Update.class);
+        String sql = String.join(" ", update.value()).toLowerCase();
+
+        assertThat(sql).contains("status = 0")
+                .contains("claim_token = null")
+                .contains("claim_token = #{token}")
+                .contains("status = 1");
+    }
+
+    @Test
+    void pageReplacementCancelsHistoricalSuccessfulPlanUnits() throws Exception {
+        Update update = TaskPlanUnitMapper.class
+                .getMethod("cancelPageUnits", java.util.List.class, String.class)
+                .getAnnotation(Update.class);
+        String sql = String.join(" ", update.value()).toLowerCase().replaceAll("\\s+", " ");
+
+        assertThat(sql).contains("status in (0,2,3)");
     }
 }

@@ -32,11 +32,16 @@ public class TaskRecovery implements ApplicationRunner {
         // 3. 仅补齐 PENDING 的入队(marker 去重;RUNNING/STOPPING/PAUSED 一律不动)
         List<TaskEntity> pending = taskMapper.selectList(new LambdaQueryWrapper<TaskEntity>()
                 .eq(TaskEntity::getStatus, TaskStatus.PENDING)
+                .isNotNull(TaskEntity::getPlanInitializedAt)
                 .orderByAsc(TaskEntity::getId));
         int enqueued = 0;
         for (TaskEntity task : pending) {
-            if (taskQueue.enqueueIfAbsent(task.getId())) {
-                enqueued++;
+            try {
+                if (taskQueue.enqueueIfAbsent(task.getId())) {
+                    enqueued++;
+                }
+            } catch (RuntimeException e) {
+                log.warn("[recovery] Redis 暂不可用，任务保留 PENDING 等待补偿 taskId={}", task.getId(), e);
             }
         }
         log.info("[recovery] 启动恢复: PENDING 补入队 {}/{},RUNNING/STOPPING/PAUSED 交由 lease/watchdog 管理",

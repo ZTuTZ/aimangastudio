@@ -6,6 +6,9 @@ import com.aimanga.v2.model.Project;
 import com.aimanga.v2.repository.ChapterMapper;
 import com.aimanga.v2.repository.PageMapper;
 import com.aimanga.v2.repository.ProjectMapper;
+import com.aimanga.v2.repository.TaskMapper;
+import com.aimanga.v2.model.TaskEntity;
+import com.aimanga.v2.task.TaskStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,12 +28,25 @@ import java.util.List;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ProjectCompletionService {
 
     private final ChapterMapper chapterMapper;
     private final PageMapper pageMapper;
     private final ProjectMapper projectMapper;
+    private final TaskMapper taskMapper;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ProjectCompletionService(ChapterMapper chapterMapper, PageMapper pageMapper,
+                                    ProjectMapper projectMapper, TaskMapper taskMapper) {
+        this.chapterMapper = chapterMapper;
+        this.pageMapper = pageMapper;
+        this.projectMapper = projectMapper;
+        this.taskMapper = taskMapper;
+    }
+
+    ProjectCompletionService(ChapterMapper chapterMapper, PageMapper pageMapper, ProjectMapper projectMapper) {
+        this(chapterMapper, pageMapper, projectMapper, null);
+    }
 
     /** 重算单话状态 */
     public void recalculateChapter(Long chapterId) {
@@ -48,8 +64,7 @@ public class ProjectCompletionService {
                 .filter(p -> p.getGenerateStatus() != null && p.getGenerateStatus() == PageEntity.GEN_FAILED)
                 .count();
         long success = pages.stream()
-                .filter(p -> p.getGenerateStatus() != null && p.getGenerateStatus() == PageEntity.GEN_SUCCESS
-                        && p.getGeneratedImageUrl() != null && !p.getGeneratedImageUrl().isBlank())
+                .filter(PageReadiness::hasCurrentImage)
                 .count();
         int status;
         if (failed > 0) {
@@ -57,7 +72,7 @@ public class ProjectCompletionService {
         } else if (success == pages.size()) {
             status = Chapter.STATUS_COMPLETE;
         } else {
-            status = Chapter.STATUS_GENERATING;
+            status = hasActiveTask(chapter.getProjectId()) ? Chapter.STATUS_GENERATING : Chapter.STATUS_SCRIPT_READY;
         }
         if (chapter.getStatus() == null || chapter.getStatus() != status) {
             Chapter patch = new Chapter();
@@ -102,7 +117,7 @@ public class ProjectCompletionService {
         } else if (anyPartial) {
             status = Project.STATUS_PARTIAL;
         } else {
-            status = Project.STATUS_GENERATING;
+            status = hasActiveTask(projectId) ? Project.STATUS_GENERATING : Project.STATUS_READY;
         }
         if (project.getStatus() == null || project.getStatus() != status) {
             Project patch = new Project();
@@ -112,5 +127,13 @@ public class ProjectCompletionService {
             projectMapper.updateById(patch);
             log.info("[completion] 作品 {} 状态重算 → {}", projectId, status);
         }
+    }
+
+    private boolean hasActiveTask(Long projectId) {
+        if (taskMapper == null) return false;
+        Long count = taskMapper.selectCount(new LambdaQueryWrapper<TaskEntity>()
+                .eq(TaskEntity::getProjectId, projectId)
+                .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.STOPPING));
+        return count != null && count > 0;
     }
 }

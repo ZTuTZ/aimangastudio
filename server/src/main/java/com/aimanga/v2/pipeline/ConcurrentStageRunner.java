@@ -47,15 +47,25 @@ public class ConcurrentStageRunner {
     private final ScriptWorkerPool scriptWorkerPool;
     private final ConfigService configService;
     private final RedissonClient redissonClient;
+    private final com.aimanga.v2.repository.TaskPlanUnitMapper planUnitMapper;
 
     public ConcurrentStageRunner(PipelineStageService stageService, ImageWorkerPool imageWorkerPool,
                                  ScriptWorkerPool scriptWorkerPool, ConfigService configService,
                                  RedissonClient redissonClient) {
+        this(stageService, imageWorkerPool, scriptWorkerPool, configService, redissonClient, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ConcurrentStageRunner(PipelineStageService stageService, ImageWorkerPool imageWorkerPool,
+                                 ScriptWorkerPool scriptWorkerPool, ConfigService configService,
+                                 RedissonClient redissonClient,
+                                 com.aimanga.v2.repository.TaskPlanUnitMapper planUnitMapper) {
         this.stageService = stageService;
         this.imageWorkerPool = imageWorkerPool;
         this.scriptWorkerPool = scriptWorkerPool;
         this.configService = configService;
         this.redissonClient = redissonClient;
+        this.planUnitMapper = planUnitMapper;
     }
 
     /** 单 Item 处理器:输入执行上下文(Item + fencing token),输出结果引用 JSON;
@@ -98,6 +108,9 @@ public class ConcurrentStageRunner {
 
     public StageRunResult run(Long projectId, String stageType, StageRunScope scope, TaskRuntime runtime,
                               StageItemProcessor processor, StageEngine engine) {
+        if (scope != null && !scope.isUnbounded() && scope.businessIds().isEmpty()) {
+            return new StageRunResult(0, 0, 0);
+        }
         // T5.11.3/T5.11.4:同一 project+stage 同时只允许一个活跃 Runner。
         // leaseTime=-1 → Redisson 看门狗自动续期,进程死亡后锁自动释放,重启恢复可接管。
         RLock stageLock = redissonClient.getLock("aimanga:v2:stage-run:" + projectId + ":" + stageType);
@@ -112,7 +125,12 @@ public class ConcurrentStageRunner {
         try {
             return runLocked(projectId, stageType, scope, runtime, processor, engine);
         } finally {
-            stageLock.unlock();
+            try {
+                if (stageLock.isHeldByCurrentThread()) stageLock.unlock();
+            } catch (RuntimeException e) {
+                log.warn("[stage] {} {} 释放阶段锁失败，依赖数据库 ownership fencing 收尾",
+                        projectId, stageType, e);
+            }
         }
     }
 
@@ -127,9 +145,11 @@ public class ConcurrentStageRunner {
 
         // §8 重启恢复:回收孤儿 RUNNING(上次进程崩溃/被杀的残留)。
         // 此刻已持有 project+stage 唯一执行锁(T5.11.4):不存在其他存活 Runner,重置安全。
-        int recovered = stageService.resetRunningItems(projectId, stageType);
+        int recoveredPlans = planUnitMapper == null ? 0 : planUnitMapper.resetOrphanedRunning(projectId, stageType);
+        int recovered = stageService.resetOrphanedRunningItems(projectId, stageType);
         if (recovered > 0) {
-            log.warn("[stage] {} {} 回收 {} 个孤儿 RUNNING Item → 重新排队", projectId, stageType, recovered);
+            log.warn("[stage] {} {} 回收 {} 个孤儿 RUNNING Item、{} 个计划单元 → 重新排队",
+                    projectId, stageType, recovered, recoveredPlans);
         }
 
         Set<Long> claimed = ConcurrentHashMap.newKeySet();
@@ -162,12 +182,12 @@ public class ConcurrentStageRunner {
             int capacity = concurrency - inFlight.get();
             while (capacity > 0) {
                 String attemptToken = java.util.UUID.randomUUID().toString().replace("-", "");
-                PipelineStageItem item = claimNext(projectId, stageType, scope, claimed, attemptToken, runtime.owner());
-                if (item == null) {
+                StageItemExecution execution = claimNext(projectId, stageType, scope, claimed, attemptToken, runtime);
+                if (execution == null) {
                     break;
                 }
+                PipelineStageItem item = execution.item();
                 inFlight.incrementAndGet();
-                StageItemExecution execution = new StageItemExecution(item, attemptToken, runtime.owner());
                 try {
                     engine.pool().submit(() -> {
                         try {
@@ -183,6 +203,7 @@ public class ConcurrentStageRunner {
                     inFlight.decrementAndGet();
                     claimed.remove(item.getId());
                     stageService.releaseItem(item.getId(), attemptToken, runtime.owner());
+                    releasePlan(execution);
                     log.warn("[stage] {} 提交失败已归还 Item {}: {}", stageType, item.getId(), e.getMessage());
                     break;
                 }
@@ -215,9 +236,8 @@ public class ConcurrentStageRunner {
 
     /** 原子领取下一个待执行 Item(§5 + Phase 8.1 fencing + Phase 8.2 scope):
      *  领取失败(被抢)自动换下一个候选;有 scope 时只能领取本次 Task 允许的 Item */
-    private PipelineStageItem claimNext(Long projectId, String stageType, StageRunScope scope,
-                                        Set<Long> claimed, String attemptToken,
-                                        com.aimanga.v2.task.TaskExecutionOwner taskOwner) {
+    private StageItemExecution claimNext(Long projectId, String stageType, StageRunScope scope,
+                                         Set<Long> claimed, String attemptToken, TaskRuntime runtime) {
         List<Long> candidates = scope != null && !scope.isUnbounded()
                 ? stageService.getPendingItemIdsInScope(projectId, stageType, scope.businessType(),
                         scope.businessIds(), FEED_BATCH)
@@ -226,13 +246,35 @@ public class ConcurrentStageRunner {
             if (!claimed.add(id)) {
                 continue;
             }
-            if (stageService.claimItem(id, attemptToken, taskOwner)) {
-                PipelineStageItem item = stageService.getItem(id);
-                if (item != null) {
-                    return item;
-                }
+            if (!stageService.claimItem(id, attemptToken, runtime.owner())) {
+                claimed.remove(id);
+                continue;
             }
-            claimed.remove(id);
+            PipelineStageItem candidate = stageService.getItem(id);
+            if (candidate == null) {
+                stageService.releaseItem(id, attemptToken, runtime.owner());
+                claimed.remove(id);
+                continue;
+            }
+            Long planUnitId = null;
+            if (runtime.hasPlan()) {
+                planUnitId = planUnitMapper == null ? null : planUnitMapper.selectUnitId(
+                        runtime.owner().taskId(), runtime.planVersion(), candidate.getStageType(),
+                        candidate.getBusinessType(), candidate.getBusinessId());
+                if (planUnitId == null || planUnitMapper.claim(planUnitId, attemptToken) != 1) {
+                    stageService.releaseItem(id, attemptToken, runtime.owner());
+                    claimed.remove(id);
+                    continue;
+                }
+                if (!stageService.bindPlanUnit(id, attemptToken, runtime.owner(), planUnitId)) {
+                    planUnitMapper.release(planUnitId, attemptToken);
+                    stageService.releaseItem(id, attemptToken, runtime.owner());
+                    claimed.remove(id);
+                    continue;
+                }
+                candidate.setPlanUnitId(planUnitId);
+            }
+            return new StageItemExecution(candidate, attemptToken, runtime.owner(), planUnitId);
         }
         return null;
     }
@@ -249,22 +291,26 @@ public class ConcurrentStageRunner {
             if (paused.get() || stopped.get()) {
                 // 领取后阶段被暂停/任务被停止:归还 Item,下次继续
                 stageService.releaseItem(item.getId(), attemptToken, execution.taskOwner());
+                releasePlan(execution);
                 claimed.remove(item.getId());
                 return;
             }
             String resultRef = processor.process(execution);
             // Fenced 成功:0 行说明正式结果已由 commitFenced(更新 Attempt)写入,此处忽略
             stageService.markItemSuccess(item.getId(), attemptToken, execution.taskOwner(), resultRef);
+            markPlanSuccess(execution, resultRef);
             success.incrementAndGet();
             runtime.stepSuccess();
             stageService.updateStageProgress(projectId, stageType);
         } catch (StaleCommitRejectedException e) {
             // Phase 8.1:旧 Attempt 提交被拒 —— 不计失败、不重试,Item 归更新的 Attempt 所有
             staleRejected.incrementAndGet();
+            releasePlan(execution);
             claimed.remove(item.getId());
             log.warn("[stage] {} Item {} stale attempt 提交被拒(fencing 生效)", stageType, item.getId());
         } catch (TaskStopSignal s) {
             stageService.releaseItem(item.getId(), attemptToken, execution.taskOwner());
+            releasePlan(execution);
             claimed.remove(item.getId());
         } catch (Exception e) {
             int retryCount = item.getRetryCount() == null ? 0 : item.getRetryCount();
@@ -272,6 +318,7 @@ public class ConcurrentStageRunner {
             if (retryCount < maxRetry) {
                 // §6 失败重试:retry_count+1 → 回到 PENDING,下一轮重新领取执行(fenced:0 行=已被接管,放弃)
                 if (stageService.markItemRetry(item.getId(), attemptToken, execution.taskOwner(), message)) {
+                    if (execution.planUnitId() != null) planUnitMapper.markRetry(execution.planUnitId(), attemptToken, message);
                     claimed.remove(item.getId());
                     retried.incrementAndGet();
                     log.warn("[stage] {} Item {} 第 {} 次失败将重试: {}", stageType, item.getId(), retryCount + 1, message);
@@ -281,6 +328,7 @@ public class ConcurrentStageRunner {
                     log.warn("[stage] {} Item {} 重试提交被拒(stale attempt)", stageType, item.getId());
                 }
             } else if (stageService.markItemFailed(item.getId(), attemptToken, execution.taskOwner(), message)) {
+                if (execution.planUnitId() != null) planUnitMapper.markFailed(execution.planUnitId(), attemptToken, message);
                 failed.incrementAndGet();
                 runtime.stepFail(message);
                 stageService.updateStageProgress(projectId, stageType);
@@ -292,6 +340,18 @@ public class ConcurrentStageRunner {
             }
         } finally {
             inFlight.decrementAndGet();
+        }
+    }
+
+    private void markPlanSuccess(StageItemExecution execution, String resultRef) {
+        if (execution.planUnitId() != null && planUnitMapper != null) {
+            planUnitMapper.markSuccess(execution.planUnitId(), execution.attemptToken(), resultRef == null ? "{}" : resultRef);
+        }
+    }
+
+    private void releasePlan(StageItemExecution execution) {
+        if (execution.planUnitId() != null && planUnitMapper != null) {
+            planUnitMapper.release(execution.planUnitId(), execution.attemptToken());
         }
     }
 

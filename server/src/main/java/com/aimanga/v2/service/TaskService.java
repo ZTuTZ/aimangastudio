@@ -18,6 +18,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -34,7 +37,7 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
 
     /** MOCK 为系统测试类型:验证任务系统本身;真实业务类型处理器在 Phase 5/6 提供 */
     public static final Set<String> TYPES = Set.of(
-            "SPLIT", "SCRIPT", "ASSET", "SHEET", "ASSET_REF", "BATCH", "PAGE", "LAYOUT", "COLORIZE", "CLEAN", "REPAINT", "MOCK");
+            "SPLIT", "SCRIPT", "ASSET", "SHEET", "ASSET_REF", "BATCH", "PAGE", "LAYOUT", "COLORIZE", "CLEAN", "REPAINT", "EXPORT", "MOCK");
 
     private static final Set<String> NEEDS_PAGE = Set.of("PAGE", "LAYOUT", "COLORIZE", "CLEAN", "REPAINT");
 
@@ -45,11 +48,17 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
     private final ObjectMapper objectMapper;
     private final com.aimanga.v2.repository.ProjectMapper projectMapper;
     private final RedissonClient redissonClient;
+    private final TaskPlanningService taskPlanningService;
+    private final ConfigService configService;
 
+    @Transactional
     public TaskVO create(CreateTaskRequest request) {
         String type = request.taskType() == null ? "" : request.taskType().trim().toUpperCase();
         if (!TYPES.contains(type)) {
             throw new BusinessException(400, "不支持的任务类型: " + type + ",可选: " + String.join("/", TYPES));
+        }
+        if ("EXPORT".equals(type) && !CurrentUser.isAdmin()) {
+            throw new BusinessException(403, "仅管理员可创建批量导出任务");
         }
         Project project = projectService.requireAccessible(request.projectId());
         if (NEEDS_PAGE.contains(type)) {
@@ -62,6 +71,24 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
                 throw new BusinessException(400, "页面不属于当前作品");
             }
         }
+        // Serialize admission for this project so active-check, plan creation and Item initialization are atomic.
+        projectMapper.lockById(project.getId());
+        String normalizedPayload = request.payload() == null ? "{}" : request.payload().toString();
+        TaskEntity active = baseMapper.selectOne(new LambdaQueryWrapper<TaskEntity>()
+                .eq(TaskEntity::getProjectId, project.getId())
+                .eq(request.chapterId() != null, TaskEntity::getChapterId, request.chapterId())
+                .isNull(request.chapterId() == null, TaskEntity::getChapterId)
+                .eq(TaskEntity::getTaskType, type)
+                .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING,
+                        TaskStatus.STOPPING, TaskStatus.PAUSED)
+                .orderByDesc(TaskEntity::getId)
+                .last("LIMIT 1"));
+        if (active != null) {
+            if (java.util.Objects.equals(active.getPayload(), normalizedPayload)) {
+                return toVO(active, project.getTitle());
+            }
+            throw new BusinessException(409, "已有相同类型的任务正在执行或暂停;请先继续或停止该任务");
+        }
         TaskEntity task = new TaskEntity();
         task.setUserId(CurrentUser.id());
         task.setProjectId(project.getId());
@@ -70,20 +97,23 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         task.setStatus(initialStatus(project));
         task.setPauseRequested(false);
         task.setControlVersion(0L);
+        task.setPlanVersion(1);
         task.setPriority(0);
         task.setProgress(0);
         task.setTotalCount(0);
         task.setSuccessCount(0);
         task.setFailCount(0);
         task.setCurrentNo(0);
-        task.setPayload(request.payload() == null ? "{}" : request.payload().toString());
+        task.setMaxExecutionSeconds(Math.max(60, configMaxExecutionSeconds()));
+        task.setPayload(normalizedPayload);
         task.setError("");
         task.setCreateTime(LocalDateTime.now());
         save(task);
+        taskPlanningService.initializePlan(task);
         if (task.getStatus() == TaskStatus.PENDING) {
-            taskQueue.enqueue(task.getId());
+            afterCommit(() -> safeEnqueue(task.getId()));
         }
-        publisher.publishCreated(task);
+        afterCommit(() -> publisher.publishCreated(task));
         log.info("[task] 创建任务 type={} id={} projectId={}", type, task.getId(), project.getId());
         return toVO(task, project.getTitle());
     }
@@ -152,21 +182,39 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
     }
 
     /** 重试:终态任务重置为排队中并重新入队(保留断点 current_no;清执行锁/心跳;重置自动重试计数) */
+    @Transactional
     public TaskEntity retry(Long taskId) {
         TaskEntity task = requireAccessible(taskId);
         int status = task.getStatus() == null ? TaskStatus.PENDING : task.getStatus();
         if (TaskStatus.active(status)) {
             throw new BusinessException(409, "任务进行中,不能重试");
         }
-        // 清执行锁/心跳/时间(updateById 忽略 null,须用 UpdateWrapper 显式置空);人工重试重置自动重试计数
+        Project project = projectService.getById(task.getProjectId());
+        int nextStatus = initialStatus(project == null ? new Project() : project);
+        boolean planned = task.getPlanInitializedAt() != null && task.getPlanVersion() != null && task.getPlanVersion() > 0;
+        TaskPlanningService.PlanStats planStats = null;
+        if (planned) {
+            taskPlanningService.reopenFailedForManualRetry(task);
+            planStats = taskPlanningService.stats(task);
+        }
+        int planTotal = planStats == null ? 0 : planStats.total();
+        int planSuccess = planStats == null ? 0 : planStats.success();
+        int planFailed = planStats == null ? 0 : planStats.failed();
+        int planProgress = planTotal == 0 ? 0 : Math.min(100, planSuccess * 100 / planTotal);
+        // 人工重试只重开失败计划单元，保留成功断点；旧任务继续使用兼容重置。
         int updated = baseMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<TaskEntity>()
                 .eq(TaskEntity::getId, taskId)
                 .eq(TaskEntity::getStatus, status)
-                .set(TaskEntity::getStatus, TaskStatus.PENDING)
-                .set(TaskEntity::getProgress, 0)
-                .set(TaskEntity::getSuccessCount, 0)
-                .set(TaskEntity::getFailCount, 0)
-                .set(TaskEntity::getTotalCount, 0)
+                .set(TaskEntity::getStatus, nextStatus)
+                .set(!planned, TaskEntity::getProgress, 0)
+                .set(!planned, TaskEntity::getSuccessCount, 0)
+                .set(!planned, TaskEntity::getFailCount, 0)
+                .set(!planned, TaskEntity::getTotalCount, 0)
+                .set(planned, TaskEntity::getProgress, planProgress)
+                .set(planned, TaskEntity::getSuccessCount, planSuccess)
+                .set(planned, TaskEntity::getFailCount, planFailed)
+                .set(planned, TaskEntity::getTotalCount, planTotal)
+                .set(planned, TaskEntity::getCurrentNo, planSuccess + planFailed)
                 .set(TaskEntity::getError, "")
                 .set(TaskEntity::getRetryCount, 0)
                 .set(TaskEntity::getClaimToken, null)
@@ -176,7 +224,9 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         if (updated == 0) {
             throw new BusinessException(500, "重试失败,请稍后再试");
         }
-        taskQueue.enqueue(taskId);
+        if (nextStatus == TaskStatus.PENDING) {
+            afterCommit(() -> safeEnqueue(taskId));
+        }
         TaskEntity latest = getById(taskId);
         publisher.publishStatus(latest, TaskStatus.PENDING, "已重新入队");
         return latest;
@@ -205,7 +255,7 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         if (updated == 0) {
             throw new BusinessException(409, "任务状态已变化,请刷新后重试");
         }
-        taskQueue.enqueue(taskId);
+        safeEnqueue(taskId);
         TaskEntity latest = getById(taskId);
         publisher.publishStatus(latest, TaskStatus.PENDING, "已恢复(同一任务继续)");
         log.info("[task] 暂停任务已恢复 taskId={}", taskId);
@@ -263,6 +313,7 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
      * 系统内部入队(流水线链式调用,worker 线程无 Shiro 上下文):
      * userId 取作品归属,不做用户归属校验。
      */
+    @Transactional
     public TaskEntity createSystemTask(Long projectId, Long chapterId, String type, String payloadJson) {
         Project project = projectMapper.selectById(projectId);
         if (project == null) {
@@ -276,20 +327,23 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         task.setStatus(initialStatus(project));
         task.setPauseRequested(false);
         task.setControlVersion(0L);
+        task.setPlanVersion(1);
         task.setPriority(0);
         task.setProgress(0);
         task.setTotalCount(0);
         task.setSuccessCount(0);
         task.setFailCount(0);
         task.setCurrentNo(0);
+        task.setMaxExecutionSeconds(Math.max(60, configMaxExecutionSeconds()));
         task.setPayload(payloadJson == null || payloadJson.isBlank() ? "{}" : payloadJson);
         task.setError("");
         task.setCreateTime(LocalDateTime.now());
         save(task);
+        taskPlanningService.initializePlan(task);
         if (task.getStatus() == TaskStatus.PENDING) {
-            taskQueue.enqueue(task.getId());
+            afterCommit(() -> safeEnqueue(task.getId()));
         }
-        publisher.publishCreated(task);
+        afterCommit(() -> publisher.publishCreated(task));
         return task;
     }
 
@@ -373,5 +427,31 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         }
         com.fasterxml.jackson.databind.JsonNode pageId = payload.get("pageId");
         return pageId != null && pageId.canConvertToLong() ? pageId.asLong() : null;
+    }
+
+    private static void afterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
+    }
+
+    private int configMaxExecutionSeconds() {
+        return Math.min(86_400, Math.max(60,
+                configService.getInt("task_max_execution_seconds", 3600)));
+    }
+
+    private void safeEnqueue(Long taskId) {
+        try {
+            taskQueue.enqueue(taskId);
+        } catch (RuntimeException e) {
+            log.warn("[task] Redis 入队失败，任务保留 PENDING 等待数据库补偿 taskId={}", taskId, e);
+        }
     }
 }

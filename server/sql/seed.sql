@@ -1,30 +1,40 @@
--- AIMangaStudio v2 种子数据
--- 说明:初始管理员账号由后端启动引导创建(见 T2.1 AdminBootstrap),不在此硬编码密码哈希
-USE `aimanga_v2`;
+-- AIMangaStudio v2 参考种子数据。
+-- 正式环境由 Flyway V8_1_4__production_defaults.sql 自动安装这些默认值；
+-- 本文件用于人工核对/补录，不绑定数据库名，也不会覆盖已有运营配置。
 
-INSERT INTO `system_config` (`config_key`, `config_value`, `config_group`, `remark`) VALUES
--- AI 文本通道
-('ai_text_api_url', 'https://www.geeknow.top', 'ai_text', '文本 AI 接口地址'),
-('ai_text_api_key', '', 'ai_text', '文本 AI API Key(脱敏展示)'),
-('ai_text_model', 'deepseek-v4-flash', 'ai_text', '文本模型'),
-('ai_text_timeout', '120000', 'ai_text', '超时毫秒'),
-('ai_text_concurrency', '15', 'ai_text', '并发上限(Redis 信号量)'),
-('ai_text_protocol', 'gemini', 'ai_text', '协议:gemini=generateContent / openai=chat.completions'),
--- AI 生图通道
-('ai_image_api_url', 'https://www.geeknow.top', 'ai_image', '生图 AI 接口地址'),
-('ai_image_api_key', '', 'ai_image', '生图 AI API Key(脱敏展示)'),
-('ai_image_model', 'gemini-2.5-flash-image-preview', 'ai_image', '生图模型'),
-('ai_image_timeout', '600000', 'ai_image', '超时毫秒'),
-('ai_image_concurrency', '10', 'ai_image', '并发上限(Redis 信号量)'),
-('ai_image_protocol', 'gemini', 'ai_image', '协议:gemini=generateContent(默认) / openai=images.generations'),
--- AI 编辑/合并通道
-('ai_merge_api_url', 'https://www.geeknow.top', 'ai_merge', '编辑 AI 接口地址'),
-('ai_merge_api_key', '', 'ai_merge', '编辑 AI API Key(脱敏展示)'),
-('ai_merge_model', 'gemini-2.5-flash-image-preview', 'ai_merge', '编辑模型'),
-('ai_merge_timeout', '600000', 'ai_merge', '超时毫秒'),
-('ai_merge_concurrency', '10', 'ai_merge', '并发上限(Redis 信号量)'),
-('ai_merge_protocol', 'gemini', 'ai_merge', '协议:gemini=generateContent / openai=chat.completions'),
--- 提示词(留空则使用代码内置默认模板)
+INSERT INTO system_config (config_key, config_value, config_group, remark) VALUES
+('task_max_concurrency', '5', 'task', '全局任务Worker数量,1-64'),
+('task_user_concurrency', '2', 'task', '每用户并发任务数,1-20'),
+('task_max_execution_seconds', '3600', 'task', '单次Attempt最大执行秒数,60-86400'),
+('task_lease_seconds', '90', 'task', '任务租约秒数,30-600'),
+('task_heartbeat_interval_seconds', '30', 'task', '心跳间隔秒数,1-30且小于租约'),
+('task_heartbeat_threads', '2', 'task', '心跳线程数,1-8'),
+('task_permit_ttl_seconds', '120', 'task', '用户并发许可续租TTL秒数,30-600'),
+('task_page_concurrency', '5', 'task', '单任务页并发,1-20'),
+('image_generation_concurrency', '5', 'task', '图像Stage并发,1-20'),
+('image_generation_max_retry', '3', 'task', '图像单元最多重试次数,0-10'),
+('script_generation_concurrency', '2', 'task', '脚本Stage并发,1-10'),
+('script_generation_max_retry', '1', 'task', '脚本单元最多重试次数,0-10'),
+('storyboard_page_count', '10', 'task', '六段式脚本默认页数'),
+('page_direct_output', '0', 'task', '1=跳过布局阶段直接生成成品页'),
+('page_generation_asset_gate', '1', 'task', '1=缺必需角色素材时阻止出图'),
+('page_reference_max_images', '8', 'task', '单页最大参考图数量'),
+('remote_image_max_bytes', '31457280', 'security', '远程图片最大字节数'),
+('remote_image_allow_hosts', '', 'security', '远程图片允许域名,逗号分隔;空为仅IP安全校验'),
+('export_max_projects', '50', 'export', '单个导出任务最大作品数,1-200'),
+('export_max_bytes', '1073741824', 'export', '单个批量导出包最大字节数'),
+('export_artifact_ttl_hours', '168', 'export', '导出产物保留小时数'),
+('split_pack_max_chars', '8000', 'pipeline', '拆话滚动分包单包最大字数'),
+('split_target_chars_per_page', '60', 'pipeline', '拆话目标每页原文字数'),
+('split_min_chars_per_page', '35', 'pipeline', '拆话目标每页最少字数'),
+('split_max_chars_per_page', '90', 'pipeline', '拆话目标每页最多字数'),
+('asset_pack_max_chapters', '5', 'pipeline', '资产提取每包最多话数'),
+('asset_pack_max_chars', '12000', 'pipeline', '资产提取每包最大字数'),
+('asset_pack_concurrency', '2', 'pipeline', '资产提取单任务内分包并发'),
+('script_asset_context_max', '30', 'pipeline', 'SCRIPT注入标准资产上下文上限'),
+('feature_auto_split', '1', 'feature', '作品创建后自动拆话'),
+('feature_auto_asset', '1', 'feature', '脚本完成后自动提取资产'),
+('feature_auto_sheet', '0', 'feature', '自动生成全部角色设定表'),
 ('prompt_split', '', 'prompt', '拆话提示词({text})'),
 ('prompt_script', '', 'prompt', '六段式脚本提示词({text}/{aspect}/{page_count}/{style})'),
 ('prompt_asset', '', 'prompt', '资产提取提示词({text})'),
@@ -33,36 +43,36 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_group`, `rema
 ('prompt_colorize', '', 'prompt', '上色提示词'),
 ('prompt_clean', '', 'prompt', '清晰化提示词'),
 ('prompt_repaint', '', 'prompt', '局部重绘提示词({prompt})'),
--- 流水线(长剧本规划/资产分包/脚本资产上下文)
-('split_pack_max_chars', '8000', 'pipeline', '拆话滚动分包单包最大字数'),
-('split_target_chars_per_page', '60', 'pipeline', '拆话目标:每页原文 Approx 字数'),
-('split_min_chars_per_page', '35', 'pipeline', '拆话目标:每页最少字数(短末话自适应页数)'),
-('split_max_chars_per_page', '90', 'pipeline', '拆话目标:每页最多字数'),
-('asset_pack_max_chapters', '5', 'pipeline', '资产提取分包:每包最多话数'),
-('asset_pack_max_chars', '12000', 'pipeline', '资产提取分包:每包最大字数'),
-('asset_pack_concurrency', '2', 'pipeline', '资产提取:单任务内分包并发'),
-('script_asset_context_max', '30', 'pipeline', 'SCRIPT 注入的标准资产上下文上限'),
--- 任务并发(四层)
-('task_max_concurrency', '5', 'task', '全局并行任务数(Worker 线程数)'),
-('task_user_concurrency', '2', 'task', '每用户并行任务数(Redis 信号量)'),
-('task_page_concurrency', '5', 'task', '单任务内页级并发'),
-('storyboard_page_count', '10', 'task', '六段式脚本默认页数'),
--- 功能开关
-('feature_auto_split', '1', 'feature', '作品创建后自动拆话'),
-('feature_auto_asset', '1', 'feature', '脚本完成后自动提取资产'),
-('feature_auto_sheet', '0', 'feature', '脚本完成后自动生成全部角色设定表(0=关闭,素材由用户在资产库勾选生成)'),
--- OSS
-('oss_access_key', '', 'oss', '阿里云 AccessKeyId(脱敏展示)'),
-('oss_access_secret', '', 'oss', '阿里云 AccessKeySecret(脱敏展示)'),
-('oss_bucket', '', 'oss', 'Bucket 名称'),
-('oss_region', 'oss-cn-hangzhou', 'oss', '地域'),
-('oss_endpoint', '', 'oss', '自定义 endpoint(可空)'),
-('oss_image_process', 'x-oss-process=image/resize,w_600', 'oss', '缩略图处理参数(可空)')
-ON DUPLICATE KEY UPDATE `config_value` = `config_value`;
+('ai_text_api_url', '', 'ai_text', '文本AI地址,首次使用前配置'),
+('ai_text_api_key', '', 'ai_text', '文本AI密钥'),
+('ai_text_model', '', 'ai_text', '文本模型'),
+('ai_text_timeout', '120000', 'ai_text', '文本AI总超时毫秒'),
+('ai_text_concurrency', '10', 'ai_text', '文本AI并发,1-100'),
+('ai_text_protocol', 'gemini', 'ai_text', 'gemini或openai'),
+('ai_image_api_url', '', 'ai_image', '生图AI地址,首次使用前配置'),
+('ai_image_api_key', '', 'ai_image', '生图AI密钥'),
+('ai_image_model', '', 'ai_image', '生图模型'),
+('ai_image_timeout', '600000', 'ai_image', '生图AI总超时毫秒'),
+('ai_image_concurrency', '10', 'ai_image', '生图AI并发,1-100'),
+('ai_image_protocol', 'gemini', 'ai_image', 'gemini或openai'),
+('ai_merge_api_url', '', 'ai_merge', '编辑AI地址,首次使用前配置'),
+('ai_merge_api_key', '', 'ai_merge', '编辑AI密钥'),
+('ai_merge_model', '', 'ai_merge', '编辑模型'),
+('ai_merge_timeout', '600000', 'ai_merge', '编辑AI总超时毫秒'),
+('ai_merge_concurrency', '10', 'ai_merge', '编辑AI并发,1-100'),
+('ai_merge_protocol', 'gemini', 'ai_merge', 'gemini或openai'),
+('oss_access_key', '', 'oss', 'OSS AccessKeyId'),
+('oss_access_secret', '', 'oss', 'OSS AccessKeySecret'),
+('oss_bucket', '', 'oss', 'OSS Bucket'),
+('oss_region', 'oss-cn-hangzhou', 'oss', 'OSS地域'),
+('oss_endpoint', '', 'oss', 'OSS自定义endpoint'),
+('oss_image_process', 'x-oss-process=image/resize,w_600', 'oss', '缩略图处理参数')
+ON DUPLICATE KEY UPDATE config_key = VALUES(config_key);
 
--- 风格预设
-INSERT INTO `style_preset` (`name`, `positive_prompt`, `negative_prompt`, `color_mode`, `sort`, `status`, `remark`) VALUES
-('韩系唯美·局部上色', '韩系精致唯美条漫，高清细腻线稿，极细轮廓线，现代插画风格。采用局部上色手法：背景保持极简黑白/灰度，仅给人物主体或关键道具赋予鲜明的平涂色彩。强调画面的细腻感和唯美氛围。', '文字，水印，低质量，变形', 'partial', 1, 1, '默认：教程风格'),
-('日漫黑白', '经典日式黑白漫画，清晰干净的线条，使用网点与排线表现光影，人物造型简洁有辨识度，强调表情与动态。', '文字，水印，低质量，彩色', 'monochrome', 2, 1, '黑白传统'),
-('全彩现代', '现代全彩漫画，色彩鲜明饱满，光影层次丰富，人物与背景均完整上色，画面通透有氛围感。', '文字，水印，低质量，灰度', 'color', 3, 1, '全彩')
-ON DUPLICATE KEY UPDATE `name` = `name`;
+INSERT INTO style_preset
+  (preset_key, name, positive_prompt, negative_prompt, color_mode, sort, status, remark)
+VALUES
+('default-korean-partial', '韩系唯美·局部上色', '韩系精致唯美条漫,高清细腻线稿,现代插画,背景黑白灰度,主体关键色局部上色', '文字,水印,低质量,变形', 'partial', 1, 1, '系统默认'),
+('default-manga-mono', '日漫黑白', '经典日式黑白漫画,清晰线条,网点与排线光影,表情和动态明确', '文字,水印,低质量,彩色', 'monochrome', 2, 1, '系统默认'),
+('default-modern-color', '全彩现代', '现代全彩漫画,色彩鲜明,光影层次丰富,人物与背景完整上色', '文字,水印,低质量,灰度', 'color', 3, 1, '系统默认')
+ON DUPLICATE KEY UPDATE preset_key = VALUES(preset_key);

@@ -44,6 +44,8 @@ public class AdminMonitorController {
     private final PipelineStageMapper stageMapper;
     private final TaskMapper taskMapper;
     private final StageItemCommitService commitService;
+    private final com.aimanga.v2.task.OperationalMetrics operationalMetrics;
+    private final com.aimanga.v2.task.TaskWorkerPool workerPool;
 
     @GetMapping("/overview")
     public Result<Map<String, Object>> overview() {
@@ -59,6 +61,10 @@ public class AdminMonitorController {
         data.put("staleRunningTasks", taskMapper.selectLeaseOrExecutionTimeout().size());
         // Phase 8.1:fencing 生效观测
         data.put("staleCommitRejected", commitService.staleRejectedCount());
+        data.put("instanceMetrics", operationalMetrics.snapshot());
+        data.put("workerExpected", workerPool.expectedWorkers());
+        data.put("workerAlive", workerPool.aliveWorkers());
+        data.put("workerDraining", workerPool.drainingWorkers());
         List<Map<String, Object>> channels = new ArrayList<>();
         concurrencyLimiter.aiOccupancy().forEach((k, v) -> {
             Map<String, Object> c = new LinkedHashMap<>();

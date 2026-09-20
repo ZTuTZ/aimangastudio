@@ -27,9 +27,25 @@ public class TaskRuntime {
 
     /** 声明总步数(重置计数,用于重试) */
     public void begin(int total) {
+        if (hasPlan()) {
+            restore(Math.max(total, task.getTotalCount() == null ? 0 : task.getTotalCount()),
+                    task.getSuccessCount() == null ? 0 : task.getSuccessCount(),
+                    task.getFailCount() == null ? 0 : task.getFailCount());
+            return;
+        }
         this.total = total;
         success.set(0);
         fail.set(0);
+        persist();
+    }
+
+    /** Resume keeps completed units and reconstructs cumulative progress from persisted plan counters. */
+    public void restore(int total, int completed, int failed) {
+        this.total = Math.max(0, total);
+        success.set(Math.max(0, completed));
+        fail.set(Math.max(0, failed));
+        int done = success.get() + fail.get();
+        this.progress = this.total == 0 ? 0 : (int) Math.min(99L, done * 100L / this.total);
         persist();
     }
 
@@ -47,6 +63,14 @@ public class TaskRuntime {
 
     public int progress() {
         return progress;
+    }
+
+    public int planVersion() {
+        return task.getPlanVersion() == null ? 0 : task.getPlanVersion();
+    }
+
+    public boolean hasPlan() {
+        return task.getPlanInitializedAt() != null && planVersion() > 0;
     }
 
     /** 当前运行 Task 的 fencing 所有者，供其领取的 Stage Item 绑定。 */

@@ -30,6 +30,7 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
             "worker_instance_id = #{instanceId}, " +
             "lease_until = DATE_ADD(NOW(), INTERVAL #{leaseSeconds} SECOND) " +
             "WHERE id = #{id} AND status = 0 AND pause_requested = 0 " +
+            "AND plan_initialized_at IS NOT NULL " +
             "AND NOT EXISTS (SELECT 1 FROM project p WHERE p.id = task.project_id AND p.pause_requested = 1)")
     int claim(@Param("id") Long id, @Param("token") String token,
               @Param("instanceId") String instanceId, @Param("leaseSeconds") int leaseSeconds);
@@ -143,6 +144,13 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
             "AND start_time < DATE_SUB(NOW(), INTERVAL max_execution_seconds SECOND)))")
     int requeueRevoked(@Param("id") Long id, @Param("token") String token, @Param("error") String error);
 
+    /** 用户并发许可已失效：立即撤销数据库所有权，旧 Worker 的后续业务提交将被 fencing 拒绝。 */
+    @Update("UPDATE task SET status = 0, claim_token = NULL, heartbeat_time = NULL, lease_until = NULL, " +
+            "worker_instance_id = NULL, error = #{error}, last_error = #{error} " +
+            "WHERE id = #{id} AND claim_token = #{token} AND status = 1")
+    int requeueAfterPermitLoss(@Param("id") Long id, @Param("token") String token,
+                               @Param("error") String error);
+
     @Update("UPDATE task SET status = 3, claim_token = NULL, heartbeat_time = NULL, end_time = NOW(), " +
             "lease_until = NULL, worker_instance_id = NULL, error = #{error}, last_error = #{error} " +
             "WHERE id = #{id} AND claim_token = #{token} AND status = 1 AND (" +
@@ -152,8 +160,17 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
     int failRevoked(@Param("id") Long id, @Param("token") String token, @Param("error") String error);
 
     /** Redis 补偿:扫描长时间排队但未被执行的任务(create_time 超过 60 秒仍在排队) */
-    @Select("SELECT * FROM task WHERE status = 0 AND create_time < DATE_SUB(NOW(), INTERVAL 60 SECOND)")
+    @Select("SELECT * FROM task WHERE status = 0 AND plan_initialized_at IS NOT NULL " +
+            "AND create_time < DATE_SUB(NOW(), INTERVAL 60 SECOND)")
     List<TaskEntity> selectStalePending();
+
+    /** 升级兼容:旧 PENDING/PAUSED 任务必须先固化原 payload 对应的执行计划，Worker 才能领取。 */
+    @Select("SELECT * FROM task WHERE status IN (0,7) AND plan_initialized_at IS NULL ORDER BY id LIMIT 100")
+    List<TaskEntity> selectUnplannedPendingOrPaused();
+
+    @Update("UPDATE task SET status = 3, error = #{error}, last_error = #{error}, end_time = NOW() " +
+            "WHERE id = #{id} AND status IN (0,7) AND plan_initialized_at IS NULL")
+    int failUnplanned(@Param("id") Long id, @Param("error") String error);
 
     /** 暂停任务(Phase 8.3):RUNNING → PAUSED,保留 payload/进度/计数,清执行锁与心跳 */
     @Update("UPDATE task SET status = CASE WHEN pause_requested = 1 OR EXISTS (" +
@@ -168,6 +185,10 @@ public interface TaskMapper extends BaseMapper<TaskEntity> {
             "WHERE id = #{id} AND status = 7 " +
             "AND NOT EXISTS (SELECT 1 FROM project p WHERE p.id = task.project_id AND p.pause_requested = 1)")
     int resumeTask(@Param("id") Long id);
+
+    @Update("UPDATE task SET result = #{result} WHERE id = #{id} AND claim_token = #{claimToken} AND status IN (1,6)")
+    int updateResultOwned(@Param("id") Long id, @Param("claimToken") String claimToken,
+                          @Param("result") String result);
 
     @Select("""
             SELECT COUNT(*)

@@ -31,11 +31,19 @@ public class StageItemCommitService {
 
     private final PipelineStageItemMapper itemMapper;
     private final TaskMapper taskMapper;
+    private final com.aimanga.v2.repository.TaskPlanUnitMapper planUnitMapper;
     private final AtomicLong staleRejected = new AtomicLong();
 
     public StageItemCommitService(PipelineStageItemMapper itemMapper, TaskMapper taskMapper) {
+        this(itemMapper, taskMapper, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public StageItemCommitService(PipelineStageItemMapper itemMapper, TaskMapper taskMapper,
+                                  com.aimanga.v2.repository.TaskPlanUnitMapper planUnitMapper) {
         this.itemMapper = itemMapper;
         this.taskMapper = taskMapper;
+        this.planUnitMapper = planUnitMapper;
     }
 
     /** 供监控读取(Phase 8.10) */
@@ -72,6 +80,10 @@ public class StageItemCommitService {
         locked.setOwnerTaskClaimToken(null);
         locked.setUpdateTime(java.time.LocalDateTime.now());
         itemMapper.updateById(locked);
+        if (execution.planUnitId() != null && planUnitMapper != null
+                && planUnitMapper.markSuccess(execution.planUnitId(), execution.attemptToken(), resultRef) != 1) {
+            throw new StaleCommitRejectedException(execution.item().getId());
+        }
         return new CommitResult(true, resultRef);
     }
 
@@ -104,7 +116,8 @@ public class StageItemCommitService {
                 || locked.getStatus() != PipelineStageItem.STATUS_RUNNING
                 || !java.util.Objects.equals(locked.getAttemptToken(), execution.attemptToken())
                 || !java.util.Objects.equals(locked.getOwnerTaskId(), execution.taskOwner().taskId())
-                || !java.util.Objects.equals(locked.getOwnerTaskClaimToken(), execution.taskOwner().claimToken())) {
+                || !java.util.Objects.equals(locked.getOwnerTaskClaimToken(), execution.taskOwner().claimToken())
+                || !java.util.Objects.equals(locked.getPlanUnitId(), execution.planUnitId())) {
             reject(execution, "Stage Item 已被更新的 Attempt 接管");
             return false;
         }

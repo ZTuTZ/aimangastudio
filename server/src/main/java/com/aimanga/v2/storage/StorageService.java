@@ -11,6 +11,18 @@ public interface StorageService {
     /** 下载远程图片并转存,返回可访问 URL */
     String saveImageFromUrl(String dir, Long userId, String url);
 
+    /** Upload a bounded-memory file artifact such as an export ZIP. */
+    String saveFile(String dir, Long userId, java.nio.file.Path file, String ext);
+
+    /** Copy an artifact owned by this storage backend into a local checkpoint file. */
+    void copyStoredFile(String url, java.nio.file.Path target);
+
+    /** Stream an owned artifact to an authenticated response without exposing its storage URL. */
+    void writeStoredFile(String url, java.io.OutputStream target);
+
+    /** Delete an artifact owned by this storage backend. */
+    void deleteStoredFile(String url);
+
     /** 是否已配置(未配置时上传应返回明确报错) */
     boolean isConfigured();
 

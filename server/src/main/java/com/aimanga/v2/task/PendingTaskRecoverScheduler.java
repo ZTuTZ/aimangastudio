@@ -22,13 +22,19 @@ public class PendingTaskRecoverScheduler {
 
     private final TaskMapper taskMapper;
     private final TaskQueue taskQueue;
+    private final OperationalMetrics metrics;
 
     @Scheduled(fixedDelay = 60_000, initialDelay = 60_000)
     public void recoverStalePendingTasks() {
         List<TaskEntity> stale = taskMapper.selectStalePending();
         for (TaskEntity task : stale) {
-            if (taskQueue.enqueueIfAbsent(task.getId())) {
-                log.info("[task] Redis 补偿:排队超时的任务重新入队 taskId={} type={}", task.getId(), task.getTaskType());
+            try {
+                if (taskQueue.enqueueIfAbsent(task.getId())) {
+                    metrics.queueRecovery();
+                    log.info("[task] Redis 补偿:排队超时的任务重新入队 taskId={} type={}", task.getId(), task.getTaskType());
+                }
+            } catch (RuntimeException e) {
+                log.warn("[task] Redis 补偿暂时失败，任务继续保留 PENDING taskId={}", task.getId(), e);
             }
         }
     }

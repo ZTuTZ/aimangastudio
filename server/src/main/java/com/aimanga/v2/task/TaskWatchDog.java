@@ -58,7 +58,11 @@ public class TaskWatchDog {
             if (updated > 0) {
                 log.warn("[watchdog] 任务回收重新排队 taskId={} retry={}/{}: {}",
                         task.getId(), retryCount + 1, maxRetry, error);
-                taskQueue.enqueue(task.getId());
+                try {
+                    taskQueue.enqueue(task.getId());
+                } catch (RuntimeException e) {
+                    log.warn("[watchdog] Redis 返队失败，任务保留 PENDING 等待补偿 taskId={}", task.getId(), e);
+                }
             }
         } else {
             int updated = taskMapper.failRevoked(task.getId(), token, error);

@@ -58,6 +58,9 @@ public class PageEntity {
 
     private Integer imageScriptVersion;
 
+    /** Monotonic revision of the visible final image, used by generation/post-process CAS. */
+    private Long imageRevision;
+
     /** 文本层同步时的脚本版本(Phase 7.8) */
     private Integer textLayoutVersion;
 

@@ -91,12 +91,8 @@ public class MaterialGenerationService {
                 throw new BusinessException(400, "资产「" + asset.getName() + "」类型不符合该生成动作");
             }
         }
-        // 落 Items:不存在则创建,存在则强制重置(SUCCESS 也重置并带 force 标记,T5.11.1)
-        stageService.createItems(projectId, stageType, BUSINESS_TYPE_ASSET, assetIds);
-        int reset = stageService.forceResetItemsByBusiness(projectId, stageType, BUSINESS_TYPE_ASSET, assetIds);
-        log.info("[material] 作品 {} {} 请求生成 {} 个素材(强制重置 {} 个 Item)",
-                projectId, taskType, assetIds.size(), reset);
-        // 复用或创建唯一活跃任务(T5.11.3)
+        // Task admission persists the fixed target set and performs the one-time reset.
+        log.info("[material] 作品 {} {} 请求生成 {} 个素材", projectId, taskType, assetIds.size());
         return taskService.ensureUniqueActiveTask(projectId, null, taskType, payloadOf(assetIds));
     }
 
@@ -104,6 +100,7 @@ public class MaterialGenerationService {
         try {
             var mapper = com.fasterxml.jackson.databind.json.JsonMapper.builder().build();
             var node = mapper.createObjectNode();
+            node.put("force", true);
             var arr = node.putArray("assetIds");
             assetIds.forEach(arr::add);
             return mapper.writeValueAsString(node);

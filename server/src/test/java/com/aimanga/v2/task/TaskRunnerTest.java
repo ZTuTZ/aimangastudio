@@ -204,4 +204,23 @@ class TaskRunnerTest {
         assertThatThrownBy(runtime::checkPauseRequested)
                 .isInstanceOf(TaskPauseSignal.class);
     }
+
+    @Test
+    void plannedTaskBeginRestoresCompletedProgressInsteadOfResettingIt() {
+        TaskEntity owned = new TaskEntity();
+        owned.setId(1L);
+        owned.setClaimToken("worker-a");
+        owned.setPlanVersion(1);
+        owned.setPlanInitializedAt(java.time.LocalDateTime.now());
+        owned.setSuccessCount(6);
+        owned.setFailCount(0);
+        when(mapper.updateProgress(1L, "worker-a", 10, 6, 0, 6, 60)).thenReturn(1);
+
+        TaskRuntime runtime = new TaskRuntime(mapper, publisher, owned);
+        runtime.begin(10);
+
+        assertThat(runtime.successCount()).isEqualTo(6);
+        assertThat(runtime.progress()).isEqualTo(60);
+        verify(mapper).updateProgress(1L, "worker-a", 10, 6, 0, 6, 60);
+    }
 }

@@ -35,11 +35,13 @@ public class TaskWorkerPool {
 
     private final List<WorkerHandle> workers = new ArrayList<>();
     private final AtomicInteger poolSize = new AtomicInteger();
+    private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
     private ExecutorService executor;
 
     private static class WorkerHandle {
         final AtomicBoolean stopRequested = new AtomicBoolean(false);
         final AtomicBoolean running = new AtomicBoolean(false);
+        final AtomicBoolean exited = new AtomicBoolean(false);
         volatile Future<?> future;
     }
 
@@ -67,16 +69,15 @@ public class TaskWorkerPool {
     /** 配置热更新入口(保存系统配置后调用):平滑扩缩容 */
     public synchronized void refresh(int newSize) {
         int target = Math.max(1, Math.min(64, newSize));
-        int current = poolSize.get();
+        workers.removeIf(handle -> handle.exited.get());
+        int current = (int) workers.stream().filter(handle -> !handle.stopRequested.get()).count();
         if (target == current) {
             return;
         }
         if (target > current) {
             // 扩容:追加 Worker
             for (int i = current; i < target; i++) {
-                WorkerHandle handle = new WorkerHandle();
-                handle.future = executor.submit(() -> workerLoop(handle));
-                workers.add(handle);
+                startWorker();
             }
         } else {
             // 缩容:标记多余的 Worker 停止;正在执行的任务完成后自然退出(§7.3)
@@ -95,6 +96,7 @@ public class TaskWorkerPool {
 
     @PreDestroy
     public void shutdown() {
+        shuttingDown.set(true);
         // Phase 8.5 §7.4:停止领取 → 当前任务收尾 → grace 30s → 未完成由 lease recovery 接管
         for (WorkerHandle handle : workers) {
             handle.stopRequested.set(true);
@@ -122,7 +124,19 @@ public class TaskWorkerPool {
         return w.running.get();
     }
 
+    public int expectedWorkers() { return poolSize.get(); }
+
+    public synchronized long aliveWorkers() {
+        return workers.stream().filter(worker -> !worker.exited.get()).count();
+    }
+
+    public synchronized long drainingWorkers() {
+        return workers.stream().filter(worker -> worker.stopRequested.get() && !worker.exited.get()).count();
+    }
+
     private void workerLoop(WorkerHandle handle) {
+        int pollFailures = 0;
+        try {
         while (!handle.stopRequested.get()) {
             Long taskId;
             try {
@@ -133,21 +147,27 @@ public class TaskWorkerPool {
             } catch (RuntimeException e) {
                 // Redis 短暂故障不能让 Worker 永久退出；下一轮 poll 继续恢复队列消费。
                 log.error("[task] worker 拉取队列失败，将重试", e);
+                pollFailures++;
+                backoff(pollFailures);
                 continue;
             }
+            pollFailures = 0;
             if (taskId == null) {
                 continue; // 轮询超时,重新检查 stopRequested
             }
             try {
                 taskQueue.removeMarker(taskId);
             } catch (RuntimeException e) {
-                log.error("[task] worker 清理队列标记失败 taskId={}，将重试", taskId, e);
-                taskQueue.enqueueDelayed(taskId, 2000);
-                continue;
+                // Marker is only a deduplication hint. Continue to the authoritative DB claim.
+                log.warn("[task] worker 清理队列标记失败 taskId={}，继续数据库领取", taskId, e);
             }
             if (handle.stopRequested.get()) {
                 // 缩容/停机请求到达:任务放回队列,由其他 Worker 继续
-                taskQueue.enqueue(taskId);
+                try {
+                    taskQueue.enqueue(taskId);
+                } catch (RuntimeException e) {
+                    log.warn("[task] worker 收缩返队失败 taskId={}，等待数据库补偿", taskId, e);
+                }
                 return;
             }
             handle.running.set(true);
@@ -159,6 +179,37 @@ public class TaskWorkerPool {
                 handle.running.set(false);
             }
         }
+        } finally {
+            handle.running.set(false);
+            handle.exited.set(true);
+            workerExited(handle);
+        }
+    }
+
+    private synchronized void startWorker() {
+        if (shuttingDown.get()) return;
+        WorkerHandle handle = new WorkerHandle();
+        handle.future = executor.submit(() -> workerLoop(handle));
+        workers.add(handle);
+    }
+
+    private synchronized void workerExited(WorkerHandle handle) {
+        workers.remove(handle);
+        if (shuttingDown.get()) return;
+        long active = workers.stream().filter(worker -> !worker.stopRequested.get() && !worker.exited.get()).count();
+        while (active < poolSize.get()) {
+            startWorker();
+            active++;
+        }
+    }
+
+    private void backoff(int failures) {
+        long delay = Math.min(5_000L, 200L << Math.min(4, Math.max(0, failures - 1)));
+        try {
+            Thread.sleep(delay);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private void executeWithPermit(long taskId) {
@@ -166,7 +217,7 @@ public class TaskWorkerPool {
         if (task == null || task.getUserId() == null) {
             return;
         }
-        if (!TaskStatus.active(task.getStatus() == null ? TaskStatus.PENDING : task.getStatus())) {
+        if ((task.getStatus() == null ? TaskStatus.PENDING : task.getStatus()) != TaskStatus.PENDING) {
             return; // 已被停止/已完成,跳过
         }
         // Phase 8.6:ZSET limiter 许可 token(实例崩溃自动过期,无需启动重置)
@@ -176,7 +227,7 @@ public class TaskWorkerPool {
             return;
         }
         try {
-            taskRunner.run(taskId);
+            taskRunner.run(taskId, task.getUserId(), permit);
         } finally {
             concurrencyLimiter.releaseUser(task.getUserId(), permit);
         }

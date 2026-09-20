@@ -5,6 +5,7 @@ import { App } from 'antd';
 import { useState } from 'react';
 import { adminApi } from '@/api/admin';
 import { TASK_STATUS, TASK_TYPE_LABELS, tasksApi, type TaskVO } from '@/api/tasks';
+import { TaskStatusTag } from '@/components/TaskStatusTag';
 
 const STAGE_NAMES: Record<string, string> = {
   SHEET: '角色设定表',
@@ -162,9 +163,7 @@ export function TaskMonitor() {
             { title: '类型', dataIndex: 'taskType', width: 100, render: (t) => <Tag bordered={false}>{TASK_TYPE_LABELS[t] ?? t}</Tag> },
             {
               title: '状态', dataIndex: 'status', width: 100,
-              render: (s, task) => <Tag color={TASK_STATUS[s]?.color} bordered={false}>
-                {task.pauseRequested && s === 1 ? '暂停中' : TASK_STATUS[s]?.label ?? s}
-              </Tag>,
+              render: (_s, task) => <TaskStatusTag task={task} />,
             },
             { title: '进度', width: 150, render: (_, t) => `${t.progress}% (${t.successCount}/${t.totalCount})` },
             { title: '重试', width: 60, render: (_, task) => task.retryCount },

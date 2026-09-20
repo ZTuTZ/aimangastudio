@@ -16,5 +16,6 @@ public record PageVO(
         Integer scriptVersion,
         Integer layoutScriptVersion,
         Integer imageScriptVersion,
+        Long imageRevision,
         String generateRecords) {
 }

@@ -9,6 +9,7 @@ import com.aimanga.v2.model.Project;
 import com.aimanga.v2.model.TaskEntity;
 import com.aimanga.v2.task.TaskHandler;
 import com.aimanga.v2.task.TaskRuntime;
+import com.aimanga.v2.service.TaskPlanningService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -38,6 +39,7 @@ public class AssetRefTaskHandler implements TaskHandler {
     private final ConcurrentStageRunner stageRunner;
     private final PipelineStageService stageService;
     private final StageItemCommitService commitService;
+    private final TaskPlanningService taskPlanningService;
 
     @Override
     public String type() {
@@ -47,25 +49,33 @@ public class AssetRefTaskHandler implements TaskHandler {
     @Override
     public void run(TaskEntity task, TaskRuntime runtime) {
         Project project = ctx.project(task.getProjectId());
-        List<Long> assetIds = parseAssetIds(task.getPayload());
+        boolean planned = taskPlanningService.hasPlan(task);
+        List<Long> assetIds = planned
+                ? taskPlanningService.targetIds(task, PipelineStageService.STAGE_REFERENCE, BUSINESS_TYPE_ASSET)
+                : parseAssetIds(task.getPayload());
         stageService.markRunning(project.getId(), PipelineStageService.STAGE_REFERENCE);
 
-        if (!assetIds.isEmpty()) {
+        if (!planned && !assetIds.isEmpty()) {
             syncSelected(project, assetIds);
-        } else {
+        } else if (!planned) {
             syncAllMissing(project);
+            assetIds = ctx.assetMapper.selectList(new LambdaQueryWrapper<Asset>()
+                            .eq(Asset::getProjectId, project.getId())
+                            .in(Asset::getAssetType, Asset.TYPE_SCENE, Asset.TYPE_PROP, Asset.TYPE_OUTFIT))
+                    .stream().map(Asset::getId).toList();
         }
         // T5.11.4:孤儿 RUNNING 回收移入 Runner,仅在持有 project+stage 唯一执行锁时执行。
 
-        PipelineStageService.StageItemStats before = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_REFERENCE);
+        PipelineStageService.StageItemStats before = stageService.getItemStatsInScope(
+                project.getId(), PipelineStageService.STAGE_REFERENCE, BUSINESS_TYPE_ASSET, assetIds);
         if (before.total() == 0 || before.pending() == 0) {
-            stageService.markSuccess(project.getId(), PipelineStageService.STAGE_REFERENCE);
+            stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_REFERENCE);
             return;
         }
-        runtime.begin((int) before.pending());
+        runtime.begin(assetIds.size());
 
         // Phase 8.2:手动勾选 → 只执行这些资产的 Item;全量跑 → 项目级
-        StageRunScope scope = assetIds.isEmpty() ? StageRunScope.all() : StageRunScope.assets(assetIds);
+        StageRunScope scope = StageRunScope.assets(assetIds);
         stageRunner.run(project.getId(), PipelineStageService.STAGE_REFERENCE, scope, runtime,
                 execution -> generateRef(project, execution), stageRunner.imageEngine());
 
@@ -75,7 +85,8 @@ public class AssetRefTaskHandler implements TaskHandler {
         }
 
         int stageStatus = stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_REFERENCE);
-        PipelineStageService.StageItemStats stats = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_REFERENCE);
+        PipelineStageService.StageItemStats stats = stageService.getItemStatsInScope(
+                project.getId(), PipelineStageService.STAGE_REFERENCE, BUSINESS_TYPE_ASSET, assetIds);
         if (stageStatus == PipelineStage.STATUS_SUCCESS) {
             log.info("[asset-ref] 作品 {} 素材参考图完成: {}/{}", project.getId(), stats.success(), stats.total());
         } else if (stageStatus == PipelineStage.STATUS_FAILED) {

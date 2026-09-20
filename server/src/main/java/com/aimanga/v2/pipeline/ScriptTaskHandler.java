@@ -16,6 +16,8 @@ import com.aimanga.v2.pipeline.text.SourceTextIndexer;
 import com.aimanga.v2.pipeline.text.SourceUnit;
 import com.aimanga.v2.task.TaskHandler;
 import com.aimanga.v2.task.TaskRuntime;
+import com.aimanga.v2.service.TaskPlanningService;
+import com.aimanga.v2.service.PageLifecycleService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -54,6 +56,8 @@ public class ScriptTaskHandler implements TaskHandler {
     private final PageAssetBindingService pageAssetBindingService;
     private final StageItemCommitService commitService;
     private final ObjectMapper objectMapper;
+    private final TaskPlanningService taskPlanningService;
+    private final PageLifecycleService pageLifecycleService;
 
     @Override
     public String type() {
@@ -63,39 +67,50 @@ public class ScriptTaskHandler implements TaskHandler {
     @Override
     public void run(TaskEntity task, TaskRuntime runtime) {
         Project project = ctx.project(task.getProjectId());
+        boolean planned = taskPlanningService.hasPlan(task);
+        List<Long> chapterIds = planned
+                ? taskPlanningService.targetIds(task, PipelineStageService.STAGE_SCRIPT, "CHAPTER")
+                : ctx.chapterMapper.selectList(new LambdaQueryWrapper<Chapter>()
+                        .eq(Chapter::getProjectId, project.getId()))
+                        .stream().map(Chapter::getId).toList();
+        boolean forceScript = parseBoolean(task.getPayload(), "forceScript");
+        boolean projectWide = task.getChapterId() == null && parseId(task.getPayload(), "chapterId") == null;
 
         // 重跑支持:把上次终态失败的章节 Item 重新排队(成功的 Item 不受影响);
         // 孤儿 RUNNING 回收由 Runner 持锁执行(T5.11.4)
-        stageService.resetFailedItems(project.getId(), PipelineStageService.STAGE_SCRIPT);
+        if (!planned) {
+            stageService.resetFailedItemsByBusiness(project.getId(), PipelineStageService.STAGE_SCRIPT,
+                    "CHAPTER", chapterIds);
+        }
 
-        // 获取全部排队中的 SCRIPT Items(幂等:SUCCESS 的自动跳过)
-        List<PipelineStageItem> items = stageService.getPendingItems(project.getId(), PipelineStageService.STAGE_SCRIPT);
-        if (items.isEmpty()) {
+        PipelineStageService.StageItemStats before = stageService.getItemStatsInScope(
+                project.getId(), PipelineStageService.STAGE_SCRIPT, "CHAPTER", chapterIds);
+        if (before.total() == 0 || before.pending() == 0) {
             // 无排队 Item → 检查是否有 Item 存在(可能是恢复后全部已完成)
-            long total = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_SCRIPT).total();
-            if (total > 0) {
+            if (before.total() > 0) {
                 log.info("[script] 作品 {} SCRIPT 全部 Item 已完成,跳过", project.getId());
-                stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SCRIPT);
-                chainAfterScript(project);
+                int status = stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_SCRIPT);
+                if (status == PipelineStage.STATUS_SUCCESS && projectWide && !forceScript) chainAfterScript(project);
                 return;
             }
             throw new BusinessException(400, "SCRIPT 阶段没有待处理的 Items(请先完成拆话)");
         }
 
-        log.info("[script] 作品 {} SCRIPT 开始: {} 个 Items", project.getId(), items.size());
-        runtime.begin(items.size());
+        log.info("[script] 作品 {} SCRIPT 开始: {} 个 Items", project.getId(), before.pending());
+        runtime.begin(chapterIds.size());
         stageService.markRunning(project.getId(), PipelineStageService.STAGE_SCRIPT);
 
         // Phase 5.9 并发引擎 + T5.11.6:SCRIPT 使用独立脚本 Worker 池,不再占用生图池
-        stageRunner.run(project.getId(), PipelineStageService.STAGE_SCRIPT, StageRunScope.all(), runtime,
-                execution -> processOneChapter(project, execution), stageRunner.scriptEngine());
+        stageRunner.run(project.getId(), PipelineStageService.STAGE_SCRIPT, StageRunScope.chapters(chapterIds), runtime,
+                execution -> processOneChapter(project, execution, task.getId()), stageRunner.scriptEngine());
 
 
         // 终态判定(Phase 8.2:按全部 Item 重算)
         int stageStatus = stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_SCRIPT);
-        PipelineStageService.StageItemStats stats = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_SCRIPT);
+        PipelineStageService.StageItemStats stats = stageService.getItemStatsInScope(
+                project.getId(), PipelineStageService.STAGE_SCRIPT, "CHAPTER", chapterIds);
         if (stageStatus == PipelineStage.STATUS_SUCCESS) {
-            chainAfterScript(project);
+            if (projectWide && !forceScript) chainAfterScript(project);
             log.info("[script] 作品 {} SCRIPT 完成: {}/{} 成功", project.getId(), stats.success(), stats.total());
         } else if (stageStatus == PipelineStage.STATUS_FAILED) {
             log.warn("[script] 作品 {} SCRIPT 存在失败章节: {}/{}", project.getId(), stats.failed(), stats.total());
@@ -103,7 +118,7 @@ public class ScriptTaskHandler implements TaskHandler {
     }
 
     /** 处理单个章节 Item(生成脚本 + fenced 提交:写页/角色/话状态/素材绑定 同事务,Phase 8.1) */
-    private String processOneChapter(Project project, StageItemExecution execution) {
+    private String processOneChapter(Project project, StageItemExecution execution, Long taskId) {
         PipelineStageItem item = execution.item();
         Long chapterId = item.getBusinessId();
         Chapter chapter = ctx.chapterMapper.selectById(chapterId);
@@ -112,7 +127,8 @@ public class ScriptTaskHandler implements TaskHandler {
         }
 
         // 幂等:已就绪则跳过(fenced commit 会把 Item 标成功,不计 AI 调用)
-        if (chapter.getStatus() != null && chapter.getStatus() >= Chapter.STATUS_SCRIPT_READY) {
+        if (!PipelineStageService.isForceRequested(item)
+                && chapter.getStatus() != null && chapter.getStatus() >= Chapter.STATUS_SCRIPT_READY) {
             log.info("[script] 话 {} 已就绪,跳过", chapterId);
             return "{\"chapterId\":" + chapterId + ",\"skipped\":true}";
         }
@@ -148,7 +164,8 @@ public class ScriptTaskHandler implements TaskHandler {
         // Phase 8.1 fenced commit:写页/角色 upsert/话状态/页素材绑定 同一短事务,
         // 旧 Attempt(脚本版本已过期)的提交会被拒绝,不会覆盖最新章节内容
         var commit = commitService.commitFenced(execution, () -> {
-            List<PageEntity> writtenPages = writePages(p.getId(), chapter.getId(), script);
+            List<PageEntity> writtenPages = pageLifecycleService.replaceChapterPages(
+                    p.getId(), chapter.getId(), taskId, () -> writePages(p.getId(), chapter.getId(), script));
             List<Asset> projectAssets = ctx.assetMapper.selectList(new LambdaQueryWrapper<Asset>()
                     .eq(Asset::getProjectId, p.getId()));
             for (int i = 0; i < writtenPages.size() && i < script.pages().size(); i++) {
@@ -331,11 +348,6 @@ public class ScriptTaskHandler implements TaskHandler {
 
     /** 写页(重建该话全部页),返回写入的页(T6.1.3 用于逐页写素材绑定;旧页删除时 page_asset_ref 经 FK 级联清理) */
     private List<PageEntity> writePages(Long projectId, Long chapterId, StoryScript script) {
-        List<PageEntity> existing = ctx.pageMapper.selectList(new LambdaQueryWrapper<PageEntity>()
-                .eq(PageEntity::getChapterId, chapterId));
-        for (PageEntity page : existing) {
-            ctx.pageMapper.deleteById(page.getId());
-        }
         List<PageEntity> written = new ArrayList<>();
         List<StoryScript.PageItem> pages = script.pages();
         for (int i = 0; i < pages.size(); i++) {
@@ -443,6 +455,24 @@ public class ScriptTaskHandler implements TaskHandler {
             }
             return list;
         } catch (Exception e) { return new ArrayList<>(); }
+    }
+
+    private boolean parseBoolean(String payload, String field) {
+        try {
+            return objectMapper.readTree(payload == null || payload.isBlank() ? "{}" : payload)
+                    .path(field).asBoolean(false);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private Long parseId(String payload, String field) {
+        try {
+            var value = objectMapper.readTree(payload == null || payload.isBlank() ? "{}" : payload).path(field);
+            return value.canConvertToLong() ? value.asLong() : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private static boolean blank(String s) { return s == null || s.isBlank(); }

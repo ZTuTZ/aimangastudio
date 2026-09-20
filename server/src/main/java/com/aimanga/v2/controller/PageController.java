@@ -26,7 +26,6 @@ public class PageController {
 
     private final PageService pageService;
     private final TaskService taskService;
-    private final PipelineStageService stageService;
     private final com.aimanga.v2.pipeline.GenerationRecordService generationRecordService;
     private final com.aimanga.v2.pipeline.TextLayerService textLayerService;
 
@@ -60,12 +59,9 @@ public class PageController {
     @PostMapping("/pages/{id}/generate-layout")
     public Result<com.aimanga.v2.dto.TaskVO> generateLayout(@PathVariable Long id) {
         PageEntity page = pageService.requireAccessible(id);
-        stageService.createItems(page.getProjectId(), PipelineStageService.STAGE_LAYOUT, "PAGE", java.util.List.of(id));
-        stageService.forceResetItemsByBusiness(page.getProjectId(), PipelineStageService.STAGE_LAYOUT,
-                "PAGE", java.util.List.of(id));
-        // 同 project 的 LAYOUT 任务去重:已有活跃任务时复用(Runner 自动领取新增/重置的 Item)
+        // Admission creates/resets the target only after active-task checks pass.
         return Result.ok(taskService.ensureUniqueActiveTask(page.getProjectId(), null, "LAYOUT",
-                "{\"pageId\":" + id + "}"));
+                "{\"pageId\":" + id + ",\"force\":true}"));
     }
 
     /** 单页重生成成品(T6.5.3):forceReset 该页 IMAGE Item,复用 PageGenerationService */
@@ -73,13 +69,10 @@ public class PageController {
     public Result<com.aimanga.v2.dto.TaskVO> generatePage(@PathVariable Long id,
                                                           @RequestBody(required = false) SinglePageRequest request) {
         PageEntity page = pageService.requireAccessible(id);
-        stageService.createItems(page.getProjectId(), PipelineStageService.STAGE_IMAGE, "PAGE", java.util.List.of(id));
-        stageService.forceResetItemsByBusiness(page.getProjectId(), PipelineStageService.STAGE_IMAGE,
-                "PAGE", java.util.List.of(id));
         String colorMode = request == null || request.colorMode() == null || request.colorMode().isBlank()
                 ? "" : request.colorMode();
         return Result.ok(taskService.ensureUniqueActiveTask(page.getProjectId(), page.getChapterId(), "PAGE",
-                "{\"pageId\":" + id + ",\"colorMode\":\"" + colorMode + "\"}"));
+                "{\"pageId\":" + id + ",\"colorMode\":\"" + colorMode + "\",\"force\":true}"));
     }
 
     /** 页生成记录(Phase 6.7:回溯/对比/排查) */
@@ -157,13 +150,12 @@ public class PageController {
 
     private com.aimanga.v2.dto.TaskVO postProcess(Long pageId, String op, String colorMode, String repaintPrompt, String maskUrl) {
         PageEntity page = pageService.requireAccessible(pageId);
-        stageService.createItems(page.getProjectId(), op, "PAGE", java.util.List.of(pageId));
-        stageService.forceResetItemsByBusiness(page.getProjectId(), op, "PAGE", java.util.List.of(pageId));
         String payload;
         try {
             var mapper = com.fasterxml.jackson.databind.json.JsonMapper.builder().build();
             var node = mapper.createObjectNode();
             node.put("pageId", pageId);
+            node.put("force", true);
             if (colorMode != null && !colorMode.isBlank()) node.put("colorMode", colorMode);
             if (repaintPrompt != null) node.put("repaintPrompt", repaintPrompt);
             if (maskUrl != null) node.put("maskUrl", maskUrl);

@@ -16,17 +16,27 @@ public interface PipelineStageItemMapper extends BaseMapper<PipelineStageItem> {
      */
     @Update("UPDATE pipeline_stage_item SET status = 1, attempt_no = attempt_no + 1, " +
             "attempt_token = #{attemptToken}, owner_task_id = #{ownerTaskId}, " +
-            "owner_task_claim_token = #{ownerTaskClaimToken}, claimed_at = NOW(), update_time = NOW() " +
+            "owner_task_claim_token = #{ownerTaskClaimToken}, plan_unit_id = #{planUnitId}, " +
+            "claimed_at = NOW(), update_time = NOW() " +
             "WHERE id = #{id} AND status = 0")
     int claim(@Param("id") Long id, @Param("attemptToken") String attemptToken,
-              @Param("ownerTaskId") Long ownerTaskId, @Param("ownerTaskClaimToken") String ownerTaskClaimToken);
+              @Param("ownerTaskId") Long ownerTaskId, @Param("ownerTaskClaimToken") String ownerTaskClaimToken,
+              @Param("planUnitId") Long planUnitId);
+
+    @Update("UPDATE pipeline_stage_item SET plan_unit_id = #{planUnitId}, update_time = NOW() " +
+            "WHERE id = #{id} AND status = 1 AND attempt_token = #{attemptToken} " +
+            "AND owner_task_id = #{ownerTaskId} AND owner_task_claim_token = #{ownerTaskClaimToken}")
+    int bindPlanUnit(@Param("id") Long id, @Param("attemptToken") String attemptToken,
+                     @Param("ownerTaskId") Long ownerTaskId,
+                     @Param("ownerTaskClaimToken") String ownerTaskClaimToken,
+                     @Param("planUnitId") Long planUnitId);
 
     /**
      * Fenced 释放:RUNNING → PENDING。仅当前 token 持有者可释放;
      * 影响行数=0 说明 token 已失效(被新 Attempt 接管),调用方必须放弃本次执行结果。
      */
     @Update("UPDATE pipeline_stage_item SET status = 0, attempt_token = NULL, owner_task_id = NULL, " +
-            "owner_task_claim_token = NULL, claimed_at = NULL, update_time = NOW() " +
+            "owner_task_claim_token = NULL, plan_unit_id = NULL, claimed_at = NULL, update_time = NOW() " +
             "WHERE id = #{id} AND status = 1 AND attempt_token = #{attemptToken} " +
             "AND owner_task_id = #{ownerTaskId} AND owner_task_claim_token = #{ownerTaskClaimToken}")
     int release(@Param("id") Long id, @Param("attemptToken") String attemptToken,
@@ -93,6 +103,20 @@ public interface PipelineStageItemMapper extends BaseMapper<PipelineStageItem> {
             "WHERE project_id = #{projectId} AND stage_type = #{stageType} GROUP BY status")
     List<java.util.Map<String, Object>> selectStatusCounts(@Param("projectId") Long projectId,
                                                            @Param("stageType") String stageType);
+
+    /** Recover only rows whose owning task is gone, terminal, token-mismatched, or lease-expired. */
+    @Update("UPDATE pipeline_stage_item i LEFT JOIN task t ON t.id = i.owner_task_id " +
+            "SET i.status = 0, i.attempt_token = NULL, i.owner_task_id = NULL, " +
+            "i.owner_task_claim_token = NULL, i.plan_unit_id = NULL, i.claimed_at = NULL, i.update_time = NOW() " +
+            "WHERE i.project_id = #{projectId} AND i.stage_type = #{stageType} AND i.status = 1 AND " +
+            "(i.owner_task_id IS NULL OR t.id IS NULL OR t.status NOT IN (1,6) OR " +
+            "t.claim_token IS NULL OR t.claim_token <> i.owner_task_claim_token OR " +
+            "(t.lease_until IS NOT NULL AND t.lease_until <= NOW()))")
+    int resetOrphanedRunning(@Param("projectId") Long projectId, @Param("stageType") String stageType);
+
+    @Update("DELETE i FROM pipeline_stage_item i LEFT JOIN page p ON p.id = i.business_id " +
+            "WHERE i.project_id = #{projectId} AND i.business_type = 'PAGE' AND p.id IS NULL")
+    int deletePageOrphans(@Param("projectId") Long projectId);
 
     /** 页级归属校验:该 item 是否属于指定页(fenced commit 用) */
     @Select("SELECT id FROM pipeline_stage_item " +

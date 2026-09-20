@@ -85,9 +85,14 @@ public class PageGenerationService {
     }
 
     /** 成功业务写入(fenced commit 事务内调用):generated_image_url + records + image_script_version */
-    public String applyPageImageResult(Long pageId, Integer scriptVersion, PageGenResult result, String recordsJson) {
-        markPageStatus(pageId, PageEntity.GEN_SUCCESS, result.url(), result.mode(), null,
-                appendRecord(recordsJson, result.url(), result.mode()), orOne(scriptVersion));
+    public String applyPageImageResult(Long pageId, Integer scriptVersion, long imageRevision,
+                                       PageGenResult result, String recordsJson) {
+        int expectedScriptVersion = orOne(scriptVersion);
+        String records = appendRecord(recordsJson, result.url(), result.mode());
+        if (pageMapper.applyImageIfCurrent(pageId, expectedScriptVersion, imageRevision,
+                result.url(), result.mode(), records) != 1) {
+            throw new ContentVersionConflictException("页面内容版本已变化,成品结果已拒绝");
+        }
         return "{\"pageId\":" + pageId + ",\"image\":\"" + result.url() + "\"}";
     }
 

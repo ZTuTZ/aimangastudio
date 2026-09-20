@@ -70,7 +70,7 @@ class ConcurrentStageRunnerTest {
         runner = new ConcurrentStageRunner(stageService, workerPool, scriptPool, configService, redisson);
 
         when(stageService.isStagePaused(eq(PROJECT_ID), eq(STAGE))).thenReturn(false);
-        when(stageService.resetRunningItems(PROJECT_ID, STAGE)).thenReturn(0);
+        when(stageService.resetOrphanedRunningItems(PROJECT_ID, STAGE)).thenReturn(0);
         when(stageService.claimItem(anyLong(), anyString(), any(TaskExecutionOwner.class))).thenReturn(true);
         // fenced 状态写默认成功(否则重试语义会变成 stale→重领 的无限循环)
         when(stageService.markItemRetry(anyLong(), anyString(), any(TaskExecutionOwner.class), anyString())).thenReturn(true);
@@ -180,12 +180,12 @@ class ConcurrentStageRunnerTest {
 
     @Test
     void orphanRecovery_resetsRunningItemsBeforeRun() {
-        when(stageService.resetRunningItems(PROJECT_ID, STAGE)).thenReturn(3);
+        when(stageService.resetOrphanedRunningItems(PROJECT_ID, STAGE)).thenReturn(3);
         when(stageService.getPendingItemIds(PROJECT_ID, STAGE, 64)).thenReturn(List.of());
 
         runner.run(PROJECT_ID, STAGE, StageRunScope.all(), runtime, it -> "{}", runner.imageEngine());
 
-        verify(stageService).resetRunningItems(PROJECT_ID, STAGE);
+        verify(stageService).resetOrphanedRunningItems(PROJECT_ID, STAGE);
     }
 
     @Test
@@ -218,7 +218,7 @@ class ConcurrentStageRunnerTest {
         assertThatThrownBy(() -> second.run(PROJECT_ID, STAGE, StageRunScope.all(), runtime, it -> "{}", second.imageEngine()))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("已有生成任务在执行中");
-        verify(stageService, never()).resetRunningItems(anyLong(), anyString());
+        verify(stageService, never()).resetOrphanedRunningItems(anyLong(), anyString());
         verify(stageService, never()).claimItem(anyLong(), anyString(), any(TaskExecutionOwner.class));
     }
 }

@@ -9,6 +9,7 @@ import com.aimanga.v2.model.Project;
 import com.aimanga.v2.model.TaskEntity;
 import com.aimanga.v2.task.TaskHandler;
 import com.aimanga.v2.task.TaskRuntime;
+import com.aimanga.v2.service.TaskPlanningService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -40,6 +41,7 @@ public class SheetTaskHandler implements TaskHandler {
     private final ConcurrentStageRunner stageRunner;
     private final PipelineStageService stageService;
     private final StageItemCommitService commitService;
+    private final TaskPlanningService taskPlanningService;
 
     @Override
     public String type() {
@@ -49,39 +51,47 @@ public class SheetTaskHandler implements TaskHandler {
     @Override
     public void run(TaskEntity task, TaskRuntime runtime) {
         Project project = ctx.project(task.getProjectId());
-        List<Long> assetIds = parseAssetIds(task.getPayload());
+        boolean planned = taskPlanningService.hasPlan(task);
+        List<Long> assetIds = planned
+                ? taskPlanningService.targetIds(task, PipelineStageService.STAGE_SHEET, BUSINESS_TYPE_ASSET)
+                : parseAssetIds(task.getPayload());
         stageService.markRunning(project.getId(), PipelineStageService.STAGE_SHEET);
 
-        if (!assetIds.isEmpty()) {
+        if (!planned && !assetIds.isEmpty()) {
             // 指定角色(批量勾选/单角色手动重生成):只处理这些。
             // T5.11.1:手动生成必须用 forceReset(SUCCESS 也重置 + force 标记),
             // MaterialGenerationService 已先落过一次,这里幂等兜底(兼容旧路径/直接重试)。
             syncSelectedAssets(project, assetIds);
-        } else {
+        } else if (!planned) {
             syncAllAssets(project);
+            assetIds = ctx.assetMapper.selectList(new LambdaQueryWrapper<Asset>()
+                            .eq(Asset::getProjectId, project.getId())
+                            .eq(Asset::getAssetType, Asset.TYPE_CHARACTER))
+                    .stream().map(Asset::getId).toList();
         }
         // T5.11.4:不再在 Handler 里无条件回收 RUNNING——孤儿回收移入 Runner,
         // 且仅在持有 project+stage 唯一执行锁时执行,不会误回收其他存活 Runner 的在跑 Item。
 
-        PipelineStageService.StageItemStats before = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_SHEET);
+        PipelineStageService.StageItemStats before = stageService.getItemStatsInScope(
+                project.getId(), PipelineStageService.STAGE_SHEET, BUSINESS_TYPE_ASSET, assetIds);
         if (before.total() == 0 || before.pending() == 0) {
-            // 没有角色,或全部已完成(重试续作场景)→ 直接完成
-            stageService.markSuccess(project.getId(), PipelineStageService.STAGE_SHEET);
-            advanceProject(project);
+            int status = stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_SHEET);
+            if (status == PipelineStage.STATUS_SUCCESS) advanceProject(project);
             return;
         }
         // 任务进度 = 本次要处理的数量(pending 统计含孤儿 RUNNING,Runner 回收后会照常处理)
-        runtime.begin((int) before.pending());
+        runtime.begin(assetIds.size());
 
         // Phase 8.2:手动勾选 → 只执行这些资产的 Item;全量跑 → 项目级
-        StageRunScope scope = assetIds.isEmpty() ? StageRunScope.all() : StageRunScope.assets(assetIds);
+        StageRunScope scope = StageRunScope.assets(assetIds);
         stageRunner.run(project.getId(), PipelineStageService.STAGE_SHEET, scope, runtime,
                 execution -> generateSheet(project, execution), stageRunner.imageEngine());
 
 
         // 终态判定(Phase 8.2:项目级 Stage 不因局部成功就 SUCCESS,按全部 Item 重算)
         int stageStatus = stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_SHEET);
-        PipelineStageService.StageItemStats stats = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_SHEET);
+        PipelineStageService.StageItemStats stats = stageService.getItemStatsInScope(
+                project.getId(), PipelineStageService.STAGE_SHEET, BUSINESS_TYPE_ASSET, assetIds);
         if (stageStatus == PipelineStage.STATUS_SUCCESS) {
             advanceProject(project);
             log.info("[sheet] 作品 {} SHEET 完成: {}/{} 成功", project.getId(), stats.success(), stats.total());

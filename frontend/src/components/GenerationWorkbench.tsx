@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ASSET_TYPE_NAMES, projectsApi, type ChapterVO } from '@/api/projects';
 import { tasksApi } from '@/api/tasks';
+import { isTaskActive, isTaskSlotOccupied } from '@/utils/taskState';
 
 const STAGE_META: Record<string, { label: string }> = {
   SPLIT: { label: '拆话' },
@@ -67,9 +68,9 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets, 
     refetchIntervalInBackground: true,
   });
   const batchTask = batchPage?.records?.[0];
-  const batchActive = !!batchTask && [0, 1, 6].includes(batchTask.status);
+  const batchActive = !!batchTask && isTaskActive(batchTask.status);
   const batchPaused = batchTask?.status === 7;
-  const batchOccupied = batchActive || batchPaused;
+  const batchOccupied = !!batchTask && isTaskSlotOccupied(batchTask.status);
 
   // Stage 实时进度(BATCH 活跃时 3s 轮询;SSE 事件也会触发失效)
   const { data: stages } = useQuery({

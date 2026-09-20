@@ -9,6 +9,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DuplicateKeyException;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -178,7 +179,14 @@ public class PipelineStageService {
             stage.setStageType(stageType);
             stage.setStatus(PipelineStage.STATUS_PENDING);
             stage.setCreateTime(LocalDateTime.now());
-            stageMapper.insert(stage);
+            try {
+                stageMapper.insert(stage);
+            } catch (DuplicateKeyException ignored) {
+                // Another admission created the same unique project/stage row.
+                stage = stageMapper.selectOne(new LambdaQueryWrapper<PipelineStage>()
+                        .eq(PipelineStage::getProjectId, projectId)
+                        .eq(PipelineStage::getStageType, stageType));
+            }
         }
         return stage;
     }
@@ -202,7 +210,17 @@ public class PipelineStageService {
             item.setStatus(PipelineStageItem.STATUS_PENDING);
             item.setRetryCount(0);
             item.setCreateTime(LocalDateTime.now());
-            itemMapper.insert(item);
+            try {
+                itemMapper.insert(item);
+            } catch (DuplicateKeyException ignored) {
+                // Only the declared business uniqueness race is tolerated; re-read proves the row exists.
+                Long concurrent = itemMapper.selectCount(new LambdaQueryWrapper<PipelineStageItem>()
+                        .eq(PipelineStageItem::getProjectId, projectId)
+                        .eq(PipelineStageItem::getStageType, stageType)
+                        .eq(PipelineStageItem::getBusinessType, businessType)
+                        .eq(PipelineStageItem::getBusinessId, bizId));
+                if (concurrent == null || concurrent == 0) throw ignored;
+            }
         }
     }
 
@@ -212,8 +230,18 @@ public class PipelineStageService {
      * Item 原子领取(Phase 8.1 Attempt Fencing):PENDING → RUNNING 并写入 attempt 代次与 token。
      * 多个 Worker 同时领取同一 Item 时只有一个成功,保证同一页/同一角色不被重复生成。
      */
+    public boolean claimItem(Long itemId, String attemptToken, com.aimanga.v2.task.TaskExecutionOwner taskOwner,
+                             Long planUnitId) {
+        return itemMapper.claim(itemId, attemptToken, taskOwner.taskId(), taskOwner.claimToken(), planUnitId) == 1;
+    }
+
     public boolean claimItem(Long itemId, String attemptToken, com.aimanga.v2.task.TaskExecutionOwner taskOwner) {
-        return itemMapper.claim(itemId, attemptToken, taskOwner.taskId(), taskOwner.claimToken()) == 1;
+        return claimItem(itemId, attemptToken, taskOwner, null);
+    }
+
+    public boolean bindPlanUnit(Long itemId, String attemptToken,
+                                com.aimanga.v2.task.TaskExecutionOwner taskOwner, Long planUnitId) {
+        return itemMapper.bindPlanUnit(itemId, attemptToken, taskOwner.taskId(), taskOwner.claimToken(), planUnitId) == 1;
     }
 
     /** Fenced 释放(用户停止/暂停时把在跑 Item 归还;token 失效=0 行,由调用方忽略) */
@@ -244,16 +272,8 @@ public class PipelineStageService {
     }
 
     /** 回收孤儿 RUNNING Items(进程崩溃/被杀残留)。任务层 claim_token+看门狗保证同一阶段同时只有一个 Runner,启动时重置安全。 */
-    public int resetRunningItems(Long projectId, String stageType) {
-        return itemMapper.update(null, new LambdaUpdateWrapper<PipelineStageItem>()
-                .eq(PipelineStageItem::getProjectId, projectId)
-                .eq(PipelineStageItem::getStageType, stageType)
-                .eq(PipelineStageItem::getStatus, PipelineStageItem.STATUS_RUNNING)
-                .set(PipelineStageItem::getStatus, PipelineStageItem.STATUS_PENDING)
-                .set(PipelineStageItem::getAttemptToken, null)
-                .set(PipelineStageItem::getOwnerTaskId, null)
-                .set(PipelineStageItem::getOwnerTaskClaimToken, null)
-                .set(PipelineStageItem::getClaimedAt, null));
+    public int resetOrphanedRunningItems(Long projectId, String stageType) {
+        return itemMapper.resetOrphanedRunning(projectId, stageType);
     }
 
     /** 重跑支持:把终态 FAILED 的 Items 重新排队(重跑 SHEET/SCRIPT 任务时自动重试失败单元) */
@@ -492,5 +512,20 @@ public class PipelineStageService {
             }
         }
         return new StageItemStats(success + failed + running + pending, success, failed, running + pending);
+    }
+
+    public StageItemStats getItemStatsInScope(Long projectId, String stageType, String businessType,
+                                               java.util.Collection<Long> businessIds) {
+        if (businessIds == null) throw new IllegalArgumentException("scoped businessIds must not be null");
+        if (businessIds.isEmpty()) return new StageItemStats(0, 0, 0, 0);
+        List<PipelineStageItem> items = itemMapper.selectList(new LambdaQueryWrapper<PipelineStageItem>()
+                .eq(PipelineStageItem::getProjectId, projectId)
+                .eq(PipelineStageItem::getStageType, stageType)
+                .eq(PipelineStageItem::getBusinessType, businessType)
+                .in(PipelineStageItem::getBusinessId, businessIds));
+        long success = items.stream().filter(i -> i.getStatus() == PipelineStageItem.STATUS_SUCCESS).count();
+        long failed = items.stream().filter(i -> i.getStatus() == PipelineStageItem.STATUS_FAILED).count();
+        long pending = items.size() - success - failed;
+        return new StageItemStats(items.size(), success, failed, pending);
     }
 }

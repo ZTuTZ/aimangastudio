@@ -69,6 +69,8 @@ public class RemoteImageFetcher {
                     if (!ALLOWED_MIME.contains(mime)) {
                         throw new BusinessException(502, "不支持的图片 MIME: " + mime);
                     }
+                } else {
+                    throw new BusinessException(502, "图片响应缺少 Content-Type");
                 }
                 long declared = conn.getContentLengthLong();
                 if (declared > maxBytes()) {

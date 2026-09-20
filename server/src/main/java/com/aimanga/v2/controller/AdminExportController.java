@@ -8,17 +8,17 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
-import java.io.ByteArrayOutputStream;
-import java.nio.charset.StandardCharsets;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
 
 /**
  * 批量导出(Phase 7.5,仅 ADMIN):
@@ -31,6 +31,8 @@ import java.util.zip.ZipOutputStream;
 public class AdminExportController {
 
     private final PublicationService publicationService;
+    private final com.aimanga.v2.service.TaskService taskService;
+    private final com.aimanga.v2.pipeline.ExportArtifactService artifactService;
 
     /** 批量校验:返回每部作品的校验报告(不打包) */
     @PostMapping("/batch-validate")
@@ -64,61 +66,33 @@ public class AdminExportController {
         return Result.ok(result);
     }
 
-    /** 批量导出:校验通过的打包,失败的写入 summary.json;响应为总 ZIP */
+    /** 批量导出:创建后台 EXPORT 任务，完成后从 task.result 获取下载地址与逐本错误。 */
     @PostMapping("/batch")
-    public org.springframework.http.ResponseEntity<byte[]> batchExport(@RequestBody BatchExportRequest request) {
+    public Result<com.aimanga.v2.dto.TaskVO> batchExport(@RequestBody BatchExportRequest request) {
         requireIds(request);
-        List<Map<String, Object>> items = new ArrayList<>();
-        int success = 0;
-        int failed = 0;
-        Map<String, byte[]> packages = new LinkedHashMap<>();
-        for (Long projectId : request.projectIds()) {
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("projectId", projectId);
-            try {
-                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
-                publicationService.writeZip(projectId, bos);
-                packages.put("comic-" + projectId + ".zip", bos.toByteArray());
-                item.put("exported", true);
-                success++;
-            } catch (Exception e) {
-                item.put("exported", false);
-                item.put("error", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
-                failed++;
-            }
-            items.add(item);
-        }
         try {
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            ZipOutputStream zip = new ZipOutputStream(bos);
-            packages.forEach((name, bytes) -> {
-                try {
-                    zip.putNextEntry(new ZipEntry(name));
-                    zip.write(bytes);
-                    zip.closeEntry();
-                } catch (Exception ignored) {
-                }
-            });
-            Map<String, Object> summary = new LinkedHashMap<>();
-            summary.put("total", request.projectIds().size());
-            summary.put("success", success);
-            summary.put("failed", failed);
-            summary.put("items", items);
-            summary.put("exportedAt", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
-            zip.putNextEntry(new ZipEntry("summary.json"));
-            zip.write(new com.fasterxml.jackson.databind.ObjectMapper()
-                    .writerWithDefaultPrettyPrinter().writeValueAsString(summary).getBytes(StandardCharsets.UTF_8));
-            zip.closeEntry();
-            zip.finish();
-            String filename = "comic-batch-"
-                    + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss")) + ".zip";
-            return org.springframework.http.ResponseEntity.ok()
-                    .header("Content-Type", "application/zip")
-                    .header("Content-Disposition", "attachment; filename=" + filename)
-                    .body(bos.toByteArray());
+            List<Long> ids = new ArrayList<>(new java.util.LinkedHashSet<>(request.projectIds()));
+            var payload = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+            payload.set("projectIds", new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(ids));
+            return Result.ok(taskService.create(new com.aimanga.v2.dto.CreateTaskRequest(
+                    ids.get(0), null, "EXPORT", payload)));
         } catch (Exception e) {
-            throw new BusinessException(500, "批量打包失败: " + e.getMessage());
+            if (e instanceof BusinessException business) throw business;
+            throw new BusinessException(500, "创建导出任务失败: " + e.getMessage());
         }
+    }
+
+    /** 管理员鉴权后的流式下载；存储地址不会进入任务结果或浏览器。 */
+    @GetMapping("/artifacts/{artifactId}/download")
+    public ResponseEntity<StreamingResponseBody> download(@PathVariable Long artifactId) {
+        var artifact = artifactService.requireDownloadable(artifactId);
+        StreamingResponseBody body = output -> artifactService.stream(artifact, output);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("application/zip"))
+                .contentLength(artifact.getByteSize())
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"" + artifact.getFileName().replace("\"", "") + "\"")
+                .body(body);
     }
 
     private void requireIds(BatchExportRequest request) {

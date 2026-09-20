@@ -10,6 +10,9 @@ import java.util.List;
 
 public interface ProjectMapper extends BaseMapper<Project> {
 
+    @Select("SELECT * FROM project WHERE id = #{id} FOR UPDATE")
+    Project lockById(@Param("id") Long id);
+
     /**
      * 分页计数(不触达 LONGTEXT,不关联子查询,走 idx_project_user 索引)。
      * keyword 已在服务层做 LIKE 转义。

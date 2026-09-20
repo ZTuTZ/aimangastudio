@@ -75,16 +75,14 @@ public class PostProcessService {
     }
 
     /** 业务写入(fenced commit 事务内调用):更新成品图 + 追加 op 记录,返回 resultRef */
-    public String applyResult(Project project, PageEntity page, PostProcessResult result, String repaintPrompt) {
-        PageEntity patch = new PageEntity();
-        patch.setId(page.getId());
-        patch.setGeneratedImageUrl(result.url());
-        patch.setGenerateStatus(PageEntity.GEN_SUCCESS);
-        patch.setFailReason("");
-        patch.setGenerateRecords(appendOpRecord(page.getGenerateRecords(), result.op(), result.url(), repaintPrompt));
-        patch.setImageScriptVersion(page.getScriptVersion() == null ? 1 : page.getScriptVersion());
-        patch.setUpdateTime(LocalDateTime.now());
-        pageMapper.updateById(patch);
+    public String applyResult(Project project, PageEntity page, long expectedRevision,
+                              PostProcessResult result, String repaintPrompt) {
+        int scriptVersion = page.getScriptVersion() == null ? 1 : page.getScriptVersion();
+        String records = appendOpRecord(page.getGenerateRecords(), result.op(), result.url(), repaintPrompt);
+        if (pageMapper.applyPostProcessIfCurrent(page.getId(), scriptVersion, expectedRevision,
+                page.getGeneratedImageUrl(), result.url(), records) != 1) {
+            throw new ContentVersionConflictException("页面成品图已变化,后处理结果已拒绝");
+        }
         return "{\"pageId\":" + page.getId() + ",\"url\":\"" + result.url() + "\"}";
     }
 

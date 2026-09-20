@@ -8,6 +8,7 @@ import com.aimanga.v2.model.Project;
 import com.aimanga.v2.model.TaskEntity;
 import com.aimanga.v2.task.TaskHandler;
 import com.aimanga.v2.task.TaskRuntime;
+import com.aimanga.v2.service.TaskPlanningService;
 import lombok.RequiredArgsConstructor;
 
 import java.util.List;
@@ -35,6 +36,7 @@ public class PageTaskHandler implements TaskHandler {
     private final StageItemCommitService commitService;
     private final GenerationRecordService generationRecordService;
     private final ProjectCompletionService projectCompletionService;
+    private final TaskPlanningService taskPlanningService;
 
     @Override
     public String type() {
@@ -44,20 +46,27 @@ public class PageTaskHandler implements TaskHandler {
     @Override
     public void run(TaskEntity task, TaskRuntime runtime) {
         Project project = ctx.project(task.getProjectId());
-        Long pageId = parseId(task.getPayload(), "pageId");
+        boolean planned = taskPlanningService.hasPlan(task);
+        Long requestedPageId = parseId(task.getPayload(), "pageId");
+        List<Long> targetPageIds = planned
+                ? taskPlanningService.targetIds(task, PipelineStageService.STAGE_IMAGE, BUSINESS_TYPE_PAGE)
+                : requestedPageId == null ? List.of() : List.of(requestedPageId);
+        Long pageId = targetPageIds.isEmpty() ? null : targetPageIds.get(0);
         if (pageId == null) {
             throw new BusinessException(400, "PAGE 任务需要在 payload 中提供 pageId");
         }
         String colorMode = parseString(task.getPayload(), "colorMode");
 
         stageService.markRunning(project.getId(), PipelineStageService.STAGE_IMAGE);
-        stageService.createItems(project.getId(), PipelineStageService.STAGE_IMAGE, BUSINESS_TYPE_PAGE, List.of(pageId));
-        stageService.forceResetItemsByBusiness(project.getId(), PipelineStageService.STAGE_IMAGE,
-                BUSINESS_TYPE_PAGE, List.of(pageId));
+        if (!planned) {
+            stageService.createItems(project.getId(), PipelineStageService.STAGE_IMAGE, BUSINESS_TYPE_PAGE, List.of(pageId));
+            stageService.forceResetItemsByBusiness(project.getId(), PipelineStageService.STAGE_IMAGE,
+                    BUSINESS_TYPE_PAGE, List.of(pageId));
+        }
 
-        PipelineStageService.StageItemStats before =
-                stageService.getItemStats(project.getId(), PipelineStageService.STAGE_IMAGE);
-        runtime.begin((int) Math.max(1, before.pending()));
+        PipelineStageService.StageItemStats before = stageService.getItemStatsInScope(
+                project.getId(), PipelineStageService.STAGE_IMAGE, BUSINESS_TYPE_PAGE, targetPageIds);
+        runtime.begin(targetPageIds.size());
 
         stageRunner.run(project.getId(), PipelineStageService.STAGE_IMAGE, StageRunScope.page(pageId), runtime,
                 execution -> {
@@ -66,6 +75,8 @@ public class PageTaskHandler implements TaskHandler {
                     if (page == null) {
                         throw new BusinessException(404, "页面不存在: " + item.getBusinessId());
                     }
+                    TaskPlanningService.PlannedPageInput input = taskPlanningService.requireCurrentPageInput(
+                            execution.planUnitId(), page, true);
                     if (!commitService.runWhileOwned(execution, () -> pageGenerationService.markPageRunning(page.getId()))) {
                         throw new StaleCommitRejectedException(item.getId());
                     }
@@ -74,7 +85,8 @@ public class PageTaskHandler implements TaskHandler {
                                 project, page, colorMode, true);
                         var commit = commitService.commitFenced(execution, () -> {
                             String ref = pageGenerationService.applyPageImageResult(
-                                    page.getId(), page.getScriptVersion(), result, page.getGenerateRecords());
+                                    page.getId(), input.scriptVersion(), input.imageRevision(), result,
+                                    page.getGenerateRecords());
                             generationRecordService.record(project.getId(), page.getChapterId(), page.getId(), task.getId(),
                                     GenerationRecord.KIND_PAGE, ctx.configService.getString("ai_image_model"),
                                     result.prompt(), result.images(), result.inputUrl(), result.url(),
@@ -85,7 +97,7 @@ public class PageTaskHandler implements TaskHandler {
                             throw new StaleCommitRejectedException(item.getId());
                         }
                         return commit.resultRef();
-                    } catch (StaleCommitRejectedException e) {
+                    } catch (StaleCommitRejectedException | ContentVersionConflictException e) {
                         throw e;
                     } catch (RuntimeException e) {
                         String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
@@ -95,8 +107,8 @@ public class PageTaskHandler implements TaskHandler {
                     }
                 }, stageRunner.imageEngine());
 
-        PipelineStageService.StageItemStats stats =
-                stageService.getItemStats(project.getId(), PipelineStageService.STAGE_IMAGE);
+        PipelineStageService.StageItemStats stats = stageService.getItemStatsInScope(
+                project.getId(), PipelineStageService.STAGE_IMAGE, BUSINESS_TYPE_PAGE, targetPageIds);
         if (stats.failed() == 0) {
             stageService.updateStageProgress(project.getId(), PipelineStageService.STAGE_IMAGE);
         }

@@ -1,6 +1,6 @@
 # AIMangaStudio Phase 8 后续修复执行文档
 
-> **供审核，尚未执行。** 后续执行 Agent 使用 `executing-plans` 技能，按本文件逐任务实施、测试并回填结果；未经单独授权不创建 worktree、不分派子 Agent。
+> **已审核并完成代码实施。** 2026-09-20 已按批次 A—E 落地；本节末尾记录本机验证边界与上线前仓库设置。
 
 **Goal：** 在现有任务和 Stage Item 架构上，补齐执行所有权、暂停恢复、页面版本及发布一致性，完成后续生产化收口。
 
@@ -546,21 +546,27 @@ return 1
 
 ### 审核勾选
 
-- [ ] 批次A：任务1—3。
-- [ ] 批次B：任务4—6；接受STOPPING/pause的drain语义。
-- [ ] 批次C：任务7—10；接受计划表和image_revision。
-- [ ] 批次D：任务11—13；接受发布版本Gate及正文fallback兼容改动。
-- [ ] 批次E：任务14—15；接受异步EXPORT和新seed迁移。
-- [ ] 批准新增根目录 `.github/workflows/ci.yml` 例外；未勾选则仅实施其他批准部分。
+- [x] 批次A：任务1—3。
+- [x] 批次B：任务4—6；接受STOPPING/pause的drain语义。
+- [x] 批次C：任务7—10；接受计划表和image_revision。
+- [x] 批次D：任务11—13；接受发布版本Gate及正文fallback兼容改动。
+- [x] 批次E：任务14—15；接受异步EXPORT和新seed迁移。
+- [x] 批准新增根目录 `.github/workflows/ci.yml` 例外。
 
 ### 回填格式
 
 | 任务 | 审核结果 | 实施提交 | 专项测试与结果 | 集成/故障注入证据 | 剩余限制 |
 |---|---|---|---|---|---|
-| 1—3 | 待审核 | 未实施 | 本轮仅前端基线build通过 | 未执行MySQL JSON/Runner回归 | 见1.1纠正 |
-| 4—6 | 待审核 | 未实施 | 未执行 | 未执行 | 需双ownership与控制意图 |
-| 7—10 | 待审核 | 未实施 | 未执行 | 未执行 | 需迁移与旧任务过渡 |
-| 11—13 | 待审核 | 未实施 | 未执行 | 未执行 | 需APP兼容与真实Redis |
-| 14—15 | 待审核 | 未实施 | 未执行 | 未执行 | CI目录例外需审核 |
+| 1—3 | 已批准并实施 | `e75d0a6`、当前收口提交 | TaskVO契约、严格空Scope、合法JSON reset；后端单测通过 | Scope Runner与Mapper SQL回归已覆盖 | MySQL实际SQL由CI Testcontainers继续验证 |
+| 4—6 | 已批准并实施 | `e75d0a6`、`afc91ab`、`e9a15f3`、当前收口提交 | Task/Item双fencing、STOPPING续租、pause意图与快速resume测试通过 | stale Task/Attempt、旧失败迟到和心跳异常注入通过 | 供应商侧已发请求的收费无法由本地fencing撤销 |
+| 7—10 | 已批准并实施 | 当前收口提交 | 固定计划、无副作用admission、精确重试、脚本重建清理与页面版本CAS已实现 | 旧任务安全迁移、Redis入队失败、页面计划取消回归通过 | 旧任务范围不明确时转人工失败，不做危险推断 |
+| 11—13 | 已批准并实施 | 当前收口提交 | 发布版本Gate、正文fallback、真实MIME、Worker恢复、Lua限流和permit续租已实现 | 两客户端原子限流及升级库测试已加入Testcontainers | 本机无Docker，容器测试本地跳过，由CI执行 |
+| 14—15 | 已批准并实施 | 当前收口提交 | 异步EXPORT、固定快照、流式临时文件、受控下载、过期清理、seed、前端Vitest和CI已实现 | 后端96项单测全通过；前端6项测试、lint、build通过 | 6GB压力基准需在具备磁盘配额的预发布环境执行；main分支保护需仓库管理员启用 |
 
-每个任务实际实施时拆成独立行，附命令、环境、关键断言和失败处理；环境受限就写“未验证”和原因，不能填通过。
+### 2026-09-20 验证记录
+
+- 后端：`mvn -B verify`，96项单元测试通过，0失败、0错误；Failsafe已发现`InfrastructureIT`。本机未安装Docker，1个容器测试类按`disabledWithoutDocker`跳过。
+- 前端：`npm run lint && npm test -- --run && npm run build`，3个测试文件、6项测试通过，TypeScript与Vite生产构建通过。
+- 集成测试：空库Flyway、V8.0.3升级保留运营配置、MySQL schema、Redis PING、两个Redis客户端原子限流及过期许可不可续租均已写入CI测试。
+- 代码结构：实现文件只位于当前项目根目录的`docs/`、`frontend/`、`server/`、`.github/`、`.gitignore`和`README.md`结构内；提交前继续使用精确路径核对。
+- 上线外部项：GitHub main分支保护需将`backend-verify`、`frontend-checks`设为必需检查；6GB合成导出需在预发布资源环境记录峰值堆内存与磁盘故障结果。

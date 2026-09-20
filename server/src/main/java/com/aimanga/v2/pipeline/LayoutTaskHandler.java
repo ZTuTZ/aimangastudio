@@ -9,6 +9,7 @@ import com.aimanga.v2.model.Project;
 import com.aimanga.v2.model.TaskEntity;
 import com.aimanga.v2.task.TaskHandler;
 import com.aimanga.v2.task.TaskRuntime;
+import com.aimanga.v2.service.TaskPlanningService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -38,6 +39,7 @@ public class LayoutTaskHandler implements TaskHandler {
     private final ConcurrentStageRunner stageRunner;
     private final StageItemCommitService commitService;
     private final GenerationRecordService generationRecordService;
+    private final TaskPlanningService taskPlanningService;
 
     @Override
     public String type() {
@@ -51,35 +53,28 @@ public class LayoutTaskHandler implements TaskHandler {
         Long chapterId = parseId(task.getPayload(), "chapterId");
         stageService.markRunning(project.getId(), PipelineStageService.STAGE_LAYOUT);
 
-        syncItems(project, chapterId, pageId == null && chapterId == null);
-        if (pageId != null) {
+        boolean planned = taskPlanningService.hasPlan(task);
+        if (!planned) syncItems(project, chapterId, pageId == null && chapterId == null);
+        if (!planned && pageId != null) {
             // 手动单页重布局(T6.5.2):确保 Item 存在(已有布局图的页平时不建 Item)并强制重置
             stageService.createItems(project.getId(), PipelineStageService.STAGE_LAYOUT, BUSINESS_TYPE_PAGE, List.of(pageId));
             stageService.forceResetItemsByBusiness(project.getId(), PipelineStageService.STAGE_LAYOUT,
                     BUSINESS_TYPE_PAGE, List.of(pageId));
         }
 
-        PipelineStageService.StageItemStats before =
-                stageService.getItemStats(project.getId(), PipelineStageService.STAGE_LAYOUT);
+        List<Long> targetPageIds = planned
+                ? taskPlanningService.targetIds(task, PipelineStageService.STAGE_LAYOUT, BUSINESS_TYPE_PAGE)
+                : legacyTargetPageIds(project.getId(), pageId, chapterId);
+        PipelineStageService.StageItemStats before = stageService.getItemStatsInScope(
+                project.getId(), PipelineStageService.STAGE_LAYOUT, BUSINESS_TYPE_PAGE, targetPageIds);
         if (before.total() == 0 || before.pending() == 0) {
-            stageService.markSuccess(project.getId(), PipelineStageService.STAGE_LAYOUT);
+            stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_LAYOUT);
             return;
         }
-        runtime.begin((int) before.pending());
+        runtime.begin(targetPageIds.size());
 
         // Phase 8.2:scoped run —— 单页/按话任务只允许执行目标页的 Item
-        StageRunScope scope;
-        if (pageId != null) {
-            scope = StageRunScope.page(pageId);
-        } else if (chapterId != null) {
-            List<Long> chapterPageIds = ctx.pageMapper.selectList(new LambdaQueryWrapper<PageEntity>()
-                            .eq(PageEntity::getProjectId, project.getId())
-                            .eq(PageEntity::getChapterId, chapterId))
-                    .stream().map(PageEntity::getId).toList();
-            scope = StageRunScope.pages(chapterPageIds);
-        } else {
-            scope = StageRunScope.all();
-        }
+        StageRunScope scope = StageRunScope.pages(targetPageIds);
         stageRunner.run(project.getId(), PipelineStageService.STAGE_LAYOUT, scope, runtime,
                 execution -> processOnePage(project, execution, task.getId()), stageRunner.imageEngine());
 
@@ -89,7 +84,8 @@ public class LayoutTaskHandler implements TaskHandler {
         }
 
         int stageStatus = stageService.refreshStageTerminalState(project.getId(), PipelineStageService.STAGE_LAYOUT);
-        PipelineStageService.StageItemStats stats = stageService.getItemStats(project.getId(), PipelineStageService.STAGE_LAYOUT);
+        PipelineStageService.StageItemStats stats = stageService.getItemStatsInScope(
+                project.getId(), PipelineStageService.STAGE_LAYOUT, BUSINESS_TYPE_PAGE, targetPageIds);
         if (stageStatus == PipelineStage.STATUS_SUCCESS) {
             log.info("[layout] 作品 {} LAYOUT 完成: {}/{}", project.getId(), stats.success(), stats.total());
         } else if (stageStatus == PipelineStage.STATUS_FAILED) {
@@ -97,13 +93,23 @@ public class LayoutTaskHandler implements TaskHandler {
         }
     }
 
+    private List<Long> legacyTargetPageIds(Long projectId, Long pageId, Long chapterId) {
+        if (pageId != null) return List.of(pageId);
+        return ctx.pageMapper.selectList(new LambdaQueryWrapper<PageEntity>()
+                        .eq(PageEntity::getProjectId, projectId)
+                        .eq(chapterId != null, PageEntity::getChapterId, chapterId))
+                .stream().map(PageEntity::getId).toList();
+    }
+
     /** 单页处理(Item → AI+OSS → fenced commit 写布局图,Phase 8.1) */
     private String processOnePage(Project project, StageItemExecution execution, Long taskId) {
         PageEntity page = layoutGenerationService.page(execution.item().getBusinessId());
+        TaskPlanningService.PlannedPageInput input = taskPlanningService.requireCurrentPageInput(
+                execution.planUnitId(), page, false);
         boolean force = PipelineStageService.isForceRequested(execution.item());
         LayoutGenerationService.LayoutResult result = layoutGenerationService.processPage(project, page, force);
         var commit = commitService.commitFenced(execution, () -> {
-            layoutGenerationService.applyLayoutResult(page.getId(), page.getScriptVersion(), result);
+            layoutGenerationService.applyLayoutResult(page.getId(), input.scriptVersion(), result);
             generationRecordService.record(project.getId(), page.getChapterId(), page.getId(), taskId,
                     GenerationRecord.KIND_LAYOUT, ctx.configService.getString("ai_image_model"),
                     result.prompt(), result.refUrls(), null, result.url(),

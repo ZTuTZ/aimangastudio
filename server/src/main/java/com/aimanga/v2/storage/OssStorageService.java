@@ -24,6 +24,7 @@ import java.util.Set;
 public class OssStorageService implements StorageService {
 
     private static final Set<String> ALLOWED_EXTS = Set.of("png", "jpg", "jpeg", "webp", "gif", "avif", "bmp");
+    private static final Set<String> ALLOWED_FILE_EXTS = Set.of("zip", "json");
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final Random RANDOM = new Random();
 
@@ -73,6 +74,45 @@ public class OssStorageService implements StorageService {
             client().putObject(bucket(), key, fetch.inputStream());
             return publicUrl(key);
         }
+    }
+
+    @Override
+    public String saveFile(String dir, Long userId, java.nio.file.Path file, String ext) {
+        String normalized = ext == null ? "" : ext.toLowerCase();
+        if (!ALLOWED_FILE_EXTS.contains(normalized)) {
+            throw new BusinessException(400, "不支持的文件类型: " + ext);
+        }
+        String key = buildFileKey(dir, userId, normalized);
+        client().putObject(bucket(), key, file.toFile());
+        return publicUrl(key);
+    }
+
+    @Override
+    public void copyStoredFile(String url, java.nio.file.Path target) {
+        String key = ownedKey(url);
+        try (var object = client().getObject(bucket(), key);
+             var in = object.getObjectContent()) {
+            java.nio.file.Files.copy(in, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (Exception e) {
+            throw new BusinessException(502, "读取导出检查点失败: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public void writeStoredFile(String url, java.io.OutputStream target) {
+        String key = ownedKey(url);
+        try (var object = client().getObject(bucket(), key);
+             var in = object.getObjectContent()) {
+            in.transferTo(target);
+        } catch (Exception e) {
+            throw new BusinessException(502, "读取导出产物失败: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public void deleteStoredFile(String url) {
+        if (url == null || url.isBlank()) return;
+        client().deleteObject(bucket(), ownedKey(url));
     }
 
     @Override
@@ -133,6 +173,18 @@ public class OssStorageService implements StorageService {
         return hostPrefix() + key;
     }
 
+    private String ownedKey(String url) {
+        String prefix = hostPrefix();
+        if (url == null || !url.startsWith(prefix)) {
+            throw new BusinessException(400, "导出产物不属于当前存储桶");
+        }
+        String key = url.substring(prefix.length());
+        if (!(key.startsWith("exports/checkpoints/") || key.startsWith("exports/final/"))) {
+            throw new BusinessException(400, "拒绝操作非导出产物");
+        }
+        return key;
+    }
+
     private String buildKey(String dir, Long userId, String ext) {
         String safeExt = ext == null ? "png" : ext.toLowerCase().replaceAll("[^a-z0-9]", "");
         if (!ALLOWED_EXTS.contains(safeExt)) {
@@ -142,6 +194,12 @@ public class OssStorageService implements StorageService {
         String name = System.currentTimeMillis() + "_" + Integer.toHexString(RANDOM.nextInt(0x10000))
                 + "." + safeExt;
         return (dir == null ? "misc" : dir) + "/" + (userId == null ? 0 : userId) + "/" + day + "/" + name;
+    }
+
+    private String buildFileKey(String dir, Long userId, String ext) {
+        String day = LocalDateTime.now().format(DAY);
+        String name = System.currentTimeMillis() + "_" + Integer.toHexString(RANDOM.nextInt(0x10000)) + "." + ext;
+        return (dir == null ? "artifacts" : dir) + "/" + (userId == null ? 0 : userId) + "/" + day + "/" + name;
     }
 
     private String extFromMimeOrUrl(String mime, String url) {

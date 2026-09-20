@@ -116,6 +116,7 @@ public class PageService extends ServiceImpl<PageMapper, PageEntity> {
                 page.getLayoutImageUrl(), page.getGeneratedImageUrl(), page.getColorMode(),
                 page.getGenerateStatus(), page.getFailReason(),
                 page.getScriptVersion(), page.getLayoutScriptVersion(), page.getImageScriptVersion(),
+                page.getImageRevision(),
                 page.getGenerateRecords());
     }
 }

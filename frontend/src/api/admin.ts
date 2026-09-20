@@ -1,4 +1,5 @@
 import { http, unwrap } from './http';
+import type { TaskVO } from './tasks';
 
 export interface UserRow {
   id: number;
@@ -27,7 +28,11 @@ export const adminApi = {
   listAllProjects: () => unwrap<AdminProjectRow[]>(http.get('/admin/monitor/projects')),
   batchValidate: (projectIds: number[]) =>
     unwrap<BatchExportReport>(http.post('/admin/export/batch-validate', { projectIds })),
-  batchExportUrl: '/api/admin/export/batch',
+  createBatchExport: (projectIds: number[]) =>
+    unwrap<TaskVO>(http.post('/admin/export/batch', { projectIds })),
+  downloadBatchExport: (artifactId: number) =>
+    http.get<Blob>(`/admin/export/artifacts/${artifactId}/download`, { responseType: 'blob' })
+      .then((response) => response.data),
 };
 
 export interface AdminProjectRow {
