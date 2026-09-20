@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RScoredSortedSet;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.RScript;
+import org.redisson.client.codec.StringCodec;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -53,8 +54,8 @@ public class RedisConcurrencyLimiter {
                 "redis.call('ZADD',KEYS[1],now+tonumber(ARGV[2]),ARGV[3]); " +
                 "local desired=tonumber(ARGV[2])+60000; local current=tonumber(redis.call('PTTL',KEYS[1])) or -1; " +
                 "if current < desired then redis.call('PEXPIRE',KEYS[1],desired) end; return 1";
-        Number acquired = redissonClient.getScript().eval(RScript.Mode.READ_WRITE, lua,
-                RScript.ReturnType.INTEGER, List.of(key), max, ttlMs, token);
+        Number acquired = redissonClient.getScript(StringCodec.INSTANCE).eval(RScript.Mode.READ_WRITE, lua,
+                RScript.ReturnType.INTEGER, List.of(key), String.valueOf(max), String.valueOf(ttlMs), token);
         return acquired != null && acquired.longValue() == 1L ? token : null;
     }
 
@@ -66,8 +67,8 @@ public class RedisConcurrencyLimiter {
                 "redis.call('ZADD',KEYS[1],'XX',now+tonumber(ARGV[2]),ARGV[1]); " +
                 "local desired=tonumber(ARGV[2])+60000; local current=tonumber(redis.call('PTTL',KEYS[1])) or -1; " +
                 "if current < desired then redis.call('PEXPIRE',KEYS[1],desired) end; return 1";
-        Number renewed = redissonClient.getScript().eval(RScript.Mode.READ_WRITE, lua,
-                RScript.ReturnType.INTEGER, List.of(keyOf(kind, name)), permitToken, ttlMs);
+        Number renewed = redissonClient.getScript(StringCodec.INSTANCE).eval(RScript.Mode.READ_WRITE, lua,
+                RScript.ReturnType.INTEGER, List.of(keyOf(kind, name)), permitToken, String.valueOf(ttlMs));
         return renewed != null && renewed.longValue() == 1L;
     }
 
