@@ -73,6 +73,15 @@ const GROUPS: GroupDef[] = [
     ],
   },
   {
+    key: 'export',
+    title: '批量导出',
+    fields: [
+      { key: 'export_max_projects', label: '单任务最大作品数', type: 'number' },
+      { key: 'export_max_bytes', label: '单个导出包最大字节数', type: 'number' },
+      { key: 'export_artifact_ttl_hours', label: '导出包保留小时数', type: 'number' },
+    ],
+  },
+  {
     key: 'stage_pools',
     title: '阶段并发池(Phase 5.11,热更新)',
     fields: [

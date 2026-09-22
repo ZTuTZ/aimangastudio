@@ -15,6 +15,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.io.OutputStream;
 import java.time.LocalDateTime;
@@ -49,21 +52,13 @@ public class ExportArtifactService {
         }
     }
 
+    @Transactional
     public ExportArtifact activate(ExportArtifact artifact, String storageUrl, long bytes, String sha256) {
-        if (artifact.getStatus() != null && artifact.getStatus() == ExportArtifact.STATUS_ACTIVE
-                && artifact.getStorageUrl() != null) {
-            storageService.deleteStoredFile(storageUrl);
-            return artifact;
-        }
+        ExportArtifact latest = artifactMapper.selectById(artifact.getId());
+        String previousUrl = latest == null ? artifact.getStorageUrl() : latest.getStorageUrl();
         int ttlHours = Math.max(1, configService.getInt("export_artifact_ttl_hours", 168));
         LocalDateTime expiresAt = LocalDateTime.now().plusHours(ttlHours);
         if (artifactMapper.activate(artifact.getId(), storageUrl, bytes, sha256, expiresAt) != 1) {
-            ExportArtifact latest = artifactMapper.selectById(artifact.getId());
-            if (latest != null && latest.getStatus() != null
-                    && latest.getStatus() == ExportArtifact.STATUS_ACTIVE && latest.getStorageUrl() != null) {
-                storageService.deleteStoredFile(storageUrl);
-                return latest;
-            }
             throw new BusinessException(409, "导出产物状态已变化");
         }
         artifact.setStorageUrl(storageUrl);
@@ -71,6 +66,9 @@ public class ExportArtifactService {
         artifact.setSha256(sha256);
         artifact.setStatus(ExportArtifact.STATUS_ACTIVE);
         artifact.setExpiresAt(expiresAt);
+        if (previousUrl != null && !previousUrl.isBlank() && !previousUrl.equals(storageUrl)) {
+            afterCommit(() -> safeDelete(previousUrl));
+        }
         return artifact;
     }
 
@@ -102,16 +100,38 @@ public class ExportArtifactService {
         for (ExportArtifact artifact : artifactMapper.selectCleanupCandidates()) {
             try {
                 storageService.deleteStoredFile(artifact.getStorageUrl());
-                for (String resultRef : planUnitMapper.selectExportCheckpointResults(artifact.getTaskId())) {
-                    String checkpointUrl = objectMapper.readTree(resultRef).path("url").asText(null);
-                    storageService.deleteStoredFile(checkpointUrl);
+                if (artifactMapper.markExpired(artifact.getId(), artifact.getStorageUrl()) == 1) {
+                    log.info("[export] 已清理导出产物 artifactId={} taskId={}",
+                            artifact.getId(), artifact.getTaskId());
+                } else {
+                    log.info("[export] 产物已被重试替换，跳过过期标记 artifactId={} taskId={}",
+                            artifact.getId(), artifact.getTaskId());
                 }
-                artifactMapper.markExpired(artifact.getId());
-                log.info("[export] 已清理导出产物 artifactId={} taskId={}", artifact.getId(), artifact.getTaskId());
             } catch (Exception e) {
                 log.warn("[export] 清理导出产物失败，稍后重试 artifactId={} taskId={}",
                         artifact.getId(), artifact.getTaskId(), e);
             }
         }
+    }
+
+    private void safeDelete(String storageUrl) {
+        try {
+            storageService.deleteStoredFile(storageUrl);
+        } catch (RuntimeException e) {
+            log.warn("[export] 新产物已发布，但旧文件清理失败 url={}", storageUrl, e);
+        }
+    }
+
+    private static void afterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
     }
 }

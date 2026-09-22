@@ -107,3 +107,4 @@ npm run dev        # http://localhost:5173,/api 代理到 8090
 - 各阶段执行文档与迁移 SQL 见 `docs/`
 - 端到端人工验收清单见 `docs/AIManga_v2_Phase7.7_端到端验收清单.md`
 - Phase 8 生产部署、旧任务过渡和回滚说明见 `docs/Phase8_生产部署与迁移说明_2026-09-20.md`
+- 宝塔面板单机生产部署、升级和回滚步骤见 `docs/宝塔面板生产部署手册_2026-09-22.md`

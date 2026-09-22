@@ -1,5 +1,6 @@
 package com.aimanga.v2.service;
 
+import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.model.SystemConfig;
 import com.aimanga.v2.repository.SystemConfigMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -22,6 +23,8 @@ public class ConfigService {
 
     /** 值为密钥的键名片段(脱敏展示) */
     private static final Set<String> SECRET_MARKERS = Set.of("api_key", "access_secret", "password");
+    private static final Set<String> POSITIVE_LONG_KEYS = Set.of(
+            "export_max_bytes", "export_temp_max_bytes");
 
     private final SystemConfigMapper mapper;
     private final Map<String, String> cache = new ConcurrentHashMap<>();
@@ -41,6 +44,23 @@ public class ConfigService {
             return Integer.parseInt(value.trim());
         } catch (Exception e) {
             return defaultValue;
+        }
+    }
+
+    /** 读取可能超过 Integer 范围的正整数配置；已配置的非法值必须显式报错。 */
+    public long getLong(String key, long defaultValue) {
+        String value = getString(key);
+        if (value == null || value.isBlank()) {
+            return defaultValue;
+        }
+        try {
+            long parsed = Long.parseLong(value.trim());
+            if (parsed <= 0) {
+                throw new NumberFormatException("not positive");
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            throw new BusinessException(500, "系统配置 " + key + " 必须是正整数");
         }
     }
 
@@ -75,6 +95,7 @@ public class ConfigService {
         if (configs == null) {
             return;
         }
+        validate(configs);
         for (Map.Entry<String, String> entry : configs.entrySet()) {
             String key = entry.getKey();
             String value = entry.getValue() == null ? "" : entry.getValue();
@@ -96,6 +117,22 @@ public class ConfigService {
                 mapper.updateById(patch);
             }
             cache.put(key, value);
+        }
+    }
+
+    private void validate(Map<String, String> configs) {
+        for (String key : POSITIVE_LONG_KEYS) {
+            if (!configs.containsKey(key)) {
+                continue;
+            }
+            String value = configs.get(key);
+            try {
+                if (value == null || Long.parseLong(value.trim()) <= 0) {
+                    throw new NumberFormatException("not positive");
+                }
+            } catch (NumberFormatException e) {
+                throw new BusinessException(400, "配置项 " + key + " 必须是正整数");
+            }
         }
     }
 

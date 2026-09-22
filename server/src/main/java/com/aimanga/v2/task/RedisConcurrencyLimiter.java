@@ -2,7 +2,6 @@ package com.aimanga.v2.task;
 
 import com.aimanga.v2.service.ConfigService;
 import lombok.extern.slf4j.Slf4j;
-import org.redisson.api.RScoredSortedSet;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.RScript;
 import org.redisson.client.codec.StringCodec;
@@ -29,6 +28,10 @@ import java.util.UUID;
 public class RedisConcurrencyLimiter {
 
     private static final String KEY_PREFIX = "aimanga:v2:limit:";
+    private static final String ACTIVE_PERMIT_COUNT_LUA =
+            "local tm=redis.call('TIME'); " +
+            "local now=tonumber(tm[1])*1000+math.floor(tonumber(tm[2])/1000); " +
+            "return redis.call('ZCOUNT',KEYS[1],'(' .. now,'+inf')";
 
     private final RedissonClient redissonClient;
     private final ConfigService configService;
@@ -93,7 +96,8 @@ public class RedisConcurrencyLimiter {
     /** 释放许可 */
     public void release(String kind, String name, String permitToken) {
         if (permitToken == null) return;
-        redissonClient.getScoredSortedSet(keyOf(kind, name)).remove(permitToken);
+        redissonClient.getScoredSortedSet(keyOf(kind, name), StringCodec.INSTANCE)
+                .remove(permitToken);
     }
 
     // ---------- 业务封装(替换原 RedisSemaphores 对外方法) ----------
@@ -141,9 +145,12 @@ public class RedisConcurrencyLimiter {
         Map<String, int[]> result = new LinkedHashMap<>();
         for (String channel : List.of("text", "image", "merge")) {
             int total = Math.max(1, configService.getInt("ai_" + channel + "_concurrency", 10));
-            RScoredSortedSet<String> zset = redissonClient.getScoredSortedSet(keyOf("ai", channel));
-            zset.removeRangeByScore(0, true, System.currentTimeMillis(), false);
-            int used = zset.size();
+            Number count = redissonClient.getScript(StringCodec.INSTANCE).eval(
+                    RScript.Mode.READ_ONLY,
+                    ACTIVE_PERMIT_COUNT_LUA,
+                    RScript.ReturnType.INTEGER,
+                    List.of(keyOf("ai", channel)));
+            int used = count == null ? 0 : count.intValue();
             result.put(channel, new int[]{used, total});
         }
         return result;

@@ -192,7 +192,7 @@ public class ExportTaskHandler implements TaskHandler {
 
     private void enforceQuota(long bytes) {
         long max = Math.max(10L * 1024 * 1024,
-                configService.getInt("export_max_bytes", 1_073_741_824));
+                configService.getLong("export_max_bytes", 1_073_741_824L));
         if (bytes > max) throw new BusinessException(400, "导出大小超过限制: " + max + " bytes");
     }
 
