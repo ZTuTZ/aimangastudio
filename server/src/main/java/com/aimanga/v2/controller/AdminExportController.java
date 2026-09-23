@@ -85,8 +85,9 @@ public class AdminExportController {
     /** 管理员鉴权后的流式下载；存储地址不会进入任务结果或浏览器。 */
     @GetMapping("/artifacts/{artifactId}/download")
     public ResponseEntity<StreamingResponseBody> download(@PathVariable Long artifactId) {
-        var artifact = artifactService.requireDownloadable(artifactId);
-        StreamingResponseBody body = output -> artifactService.stream(artifact, output);
+        var download = artifactService.requireDownloadable(artifactId);
+        var artifact = download.artifact();
+        StreamingResponseBody body = output -> artifactService.stream(download, output);
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("application/zip"))
                 .contentLength(artifact.getByteSize())

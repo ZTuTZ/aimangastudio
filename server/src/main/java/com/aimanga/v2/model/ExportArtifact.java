@@ -23,6 +23,9 @@ public class ExportArtifact {
     private Long byteSize;
     private String sha256;
     private Integer status;
+    private Long generation;
+    private String publisherToken;
+    private Long currentObjectId;
     private LocalDateTime expiresAt;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;

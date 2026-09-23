@@ -13,7 +13,6 @@ import com.aimanga.v2.service.ConfigService;
 import com.aimanga.v2.service.TaskService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
-import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -34,7 +33,6 @@ public class PipelineContext {
     public final TaskMapper taskMapper;
     public final ConfigService configService;
     private final TaskService taskService;
-    private final RedissonClient redissonClient;
 
     public Project project(Long id) {
         Project project = projectMapper.selectById(id);

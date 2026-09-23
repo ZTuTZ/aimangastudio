@@ -16,6 +16,7 @@ import com.aimanga.v2.repository.ChapterMapper;
 import com.aimanga.v2.repository.PageMapper;
 import com.aimanga.v2.repository.TaskMapper;
 import com.aimanga.v2.repository.TaskPlanUnitMapper;
+import com.aimanga.v2.repository.ExportStoredObjectMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -47,6 +48,7 @@ public class TaskPlanningService {
     private final ObjectMapper objectMapper;
     private final ConfigService configService;
     private final PublicationService publicationService;
+    private final ExportStoredObjectMapper exportStoredObjectMapper;
 
     @Transactional
     public List<TaskPlanUnit> initializePlan(TaskEntity task) {
@@ -222,8 +224,44 @@ public class TaskPlanningService {
         return unitMapper.reopenFailedForManualRetry(task.getId(), effectiveVersion(task));
     }
 
+    public int reopenMissingExportCheckpoints(TaskEntity task) {
+        if (!"EXPORT".equals(task.getTaskType())) return 0;
+        int reopened = 0;
+        for (TaskPlanUnit unit : unitMapper.selectPlan(task.getId(), effectiveVersion(task))) {
+            if (unit.getStatus() == null || unit.getStatus() != TaskPlanUnit.STATUS_SUCCESS
+                    || unit.getResultRef() == null) continue;
+            boolean missing;
+            try {
+                long objectId = objectMapper.readTree(unit.getResultRef()).path("objectId").asLong(0);
+                missing = objectId > 0 && exportObjectMissing(objectId);
+            } catch (Exception ignored) {
+                missing = true;
+            }
+            if (missing) {
+                int changed = unitMapper.reopenSuccessfulUnit(unit.getId());
+                if (changed == 1) {
+                    stageService.forceResetItemsByBusiness(task.getProjectId(), "EXPORT", "PROJECT",
+                            List.of(unit.getBusinessId()));
+                    reopened++;
+                }
+            }
+        }
+        return reopened;
+    }
+
+    private boolean exportObjectMissing(long objectId) {
+        var object = exportStoredObjectMapper.selectById(objectId);
+        return object == null || !com.aimanga.v2.model.ExportStoredObject.STATE_RETAINED.equals(object.getState());
+    }
+
     public List<TaskPlanUnit> plan(TaskEntity task) {
         return unitMapper.selectPlan(task.getId(), effectiveVersion(task));
+    }
+
+    public void replaceSuccessfulResult(Long unitId, String resultRef) {
+        if (unitMapper.replaceSuccessfulResult(unitId, resultRef) != 1) {
+            throw new BusinessException(409, "导出检查点已被其他执行者修改");
+        }
     }
 
     public TaskPlanUnit requireUnit(Long unitId) {

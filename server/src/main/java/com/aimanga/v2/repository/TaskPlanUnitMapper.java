@@ -50,6 +50,13 @@ public interface TaskPlanUnitMapper extends BaseMapper<TaskPlanUnit> {
             "error_message = '', finish_time = NULL WHERE task_id = #{taskId} AND plan_version = #{planVersion} AND status = 3")
     int reopenFailedForManualRetry(@Param("taskId") Long taskId, @Param("planVersion") int planVersion);
 
+    @Update("UPDATE task_plan_unit SET status=0, result_ref=NULL, attempt_token=NULL, retry_count=0, " +
+            "error_message='', finish_time=NULL, update_time=NOW() WHERE id=#{id} AND status=2")
+    int reopenSuccessfulUnit(@Param("id") Long id);
+
+    @Update("UPDATE task_plan_unit SET result_ref=#{resultRef}, update_time=NOW() WHERE id=#{id} AND status=2")
+    int replaceSuccessfulResult(@Param("id") Long id, @Param("resultRef") String resultRef);
+
     @Select("SELECT COUNT(*) FROM task_plan_unit WHERE task_id = #{taskId} AND plan_version = #{planVersion} AND status = #{status}")
     int countByStatus(@Param("taskId") Long taskId, @Param("planVersion") int planVersion,
                       @Param("status") int status);
@@ -103,4 +110,9 @@ public interface TaskPlanUnitMapper extends BaseMapper<TaskPlanUnit> {
     @Select("SELECT result_ref FROM task_plan_unit WHERE task_id = #{taskId} " +
             "AND stage_type = 'EXPORT' AND result_ref IS NOT NULL")
     List<String> selectExportCheckpointResults(@Param("taskId") Long taskId);
+
+    @Select("SELECT * FROM task_plan_unit WHERE stage_type='EXPORT' AND status=2 AND result_ref IS NOT NULL " +
+            "AND JSON_EXTRACT(result_ref, '$.url') IS NOT NULL " +
+            "AND JSON_EXTRACT(result_ref, '$.objectId') IS NULL ORDER BY id LIMIT 100")
+    List<TaskPlanUnit> selectLegacyExportCheckpoints();
 }

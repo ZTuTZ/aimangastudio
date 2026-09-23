@@ -78,6 +78,10 @@ const GROUPS: GroupDef[] = [
     fields: [
       { key: 'export_max_projects', label: '单任务最大作品数', type: 'number' },
       { key: 'export_max_bytes', label: '单个导出包最大字节数', type: 'number' },
+      { key: 'export_temp_max_bytes', label: '导出临时磁盘总预算（字节）', type: 'number' },
+      { key: 'export_checkpoint_ttl_hours', label: '导出检查点保留小时数', type: 'number' },
+      { key: 'export_download_max_seconds', label: '单次下载最长秒数', type: 'number' },
+      { key: 'export_upload_timeout_seconds', label: '导出上传超时秒数', type: 'number' },
       { key: 'export_artifact_ttl_hours', label: '导出包保留小时数', type: 'number' },
     ],
   },

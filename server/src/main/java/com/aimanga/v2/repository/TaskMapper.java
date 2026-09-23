@@ -11,6 +11,16 @@ import java.util.List;
 
 public interface TaskMapper extends BaseMapper<TaskEntity> {
 
+    @Select("SELECT * FROM task WHERE id = #{id} FOR UPDATE")
+    TaskEntity lockById(@Param("id") Long id);
+
+    @Select("SELECT * FROM task WHERE task_type = 'EXPORT' " +
+            "AND status IN (0,1,6,7) AND (#{excludeTaskId} IS NULL OR id != #{excludeTaskId}) " +
+            "AND JSON_OVERLAPS(JSON_EXTRACT(payload, '$.projectIds'), CAST(#{projectIdsJson} AS JSON)) " +
+            "ORDER BY id DESC LIMIT 1")
+    TaskEntity selectActiveExportOverlapping(@Param("projectIdsJson") String projectIdsJson,
+                                             @Param("excludeTaskId") Long excludeTaskId);
+
     /** 当前执行所有者是否受到任务级或项目级暂停意图约束。 */
     @Select("SELECT EXISTS(SELECT 1 FROM task t LEFT JOIN project p ON p.id = t.project_id " +
             "WHERE t.id = #{id} AND t.claim_token = #{claimToken} AND t.status IN (1, 6) " +

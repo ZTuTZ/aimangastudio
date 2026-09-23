@@ -20,6 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 
 class TaskPlanningServiceTest {
 
@@ -37,7 +38,7 @@ class TaskPlanningServiceTest {
         TaskPlanningService service = new TaskPlanningService(
                 unitMapper, mock(TaskMapper.class), pageMapper, mock(ChapterMapper.class),
                 mock(AssetMapper.class), mock(PipelineStageService.class), new ObjectMapper(),
-                mock(ConfigService.class), mock(PublicationService.class));
+                mock(ConfigService.class), mock(PublicationService.class), mock(com.aimanga.v2.repository.ExportStoredObjectMapper.class));
         TaskEntity task = task(11L, 7L, "LAYOUT", "{\"pageId\":42,\"force\":true}");
 
         List<TaskPlanUnit> units = service.buildUnits(task);
@@ -65,7 +66,7 @@ class TaskPlanningServiceTest {
         TaskPlanningService service = new TaskPlanningService(
                 unitMapper, mock(TaskMapper.class), pageMapper, mock(ChapterMapper.class),
                 mock(AssetMapper.class), mock(PipelineStageService.class), new ObjectMapper(),
-                mock(ConfigService.class), mock(PublicationService.class));
+                mock(ConfigService.class), mock(PublicationService.class), mock(com.aimanga.v2.repository.ExportStoredObjectMapper.class));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
                         () -> service.buildUnits(task(11L, 7L, "PAGE", "{\"pageId\":42}")))
@@ -85,7 +86,7 @@ class TaskPlanningServiceTest {
         TaskPlanningService service = new TaskPlanningService(
                 mock(TaskPlanUnitMapper.class), mock(TaskMapper.class), mock(PageMapper.class),
                 mock(ChapterMapper.class), mock(AssetMapper.class), mock(PipelineStageService.class),
-                objectMapper, configService, publicationService);
+                objectMapper, configService, publicationService, mock(com.aimanga.v2.repository.ExportStoredObjectMapper.class));
 
         List<TaskPlanUnit> units = service.buildUnits(task(12L, 7L, "EXPORT", "{\"projectIds\":[7]}"));
 
@@ -99,6 +100,31 @@ class TaskPlanningServiceTest {
                 throw new AssertionError(e);
             }
         });
+    }
+
+    @Test
+    void retryReopensSuccessfulExportUnitWhenTrackedCheckpointWasDeleted() {
+        TaskPlanUnitMapper units = mock(TaskPlanUnitMapper.class);
+        PipelineStageService stages = mock(PipelineStageService.class);
+        var objects = mock(com.aimanga.v2.repository.ExportStoredObjectMapper.class);
+        TaskPlanUnit unit = new TaskPlanUnit();
+        unit.setId(88L);
+        unit.setBusinessId(9L);
+        unit.setStatus(TaskPlanUnit.STATUS_SUCCESS);
+        unit.setResultRef("{\"objectId\":55}");
+        when(units.selectPlan(12L, 1)).thenReturn(List.of(unit));
+        when(objects.selectById(55L)).thenReturn(null);
+        when(units.reopenSuccessfulUnit(88L)).thenReturn(1);
+        TaskPlanningService service = new TaskPlanningService(
+                units, mock(TaskMapper.class), mock(PageMapper.class), mock(ChapterMapper.class),
+                mock(AssetMapper.class), stages, new ObjectMapper(), mock(ConfigService.class),
+                mock(PublicationService.class), objects);
+        TaskEntity task = task(12L, 7L, "EXPORT", "{\"projectIds\":[9]}");
+
+        assertThat(service.reopenMissingExportCheckpoints(task)).isEqualTo(1);
+
+        verify(units).reopenSuccessfulUnit(88L);
+        verify(stages).forceResetItemsByBusiness(7L, "EXPORT", "PROJECT", List.of(9L));
     }
 
     private static TaskEntity task(Long id, Long projectId, String type, String payload) {

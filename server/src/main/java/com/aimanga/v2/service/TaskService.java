@@ -16,13 +16,11 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
 
@@ -47,9 +45,9 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
     private final TaskEventPublisher publisher;
     private final ObjectMapper objectMapper;
     private final com.aimanga.v2.repository.ProjectMapper projectMapper;
-    private final RedissonClient redissonClient;
     private final TaskPlanningService taskPlanningService;
-    private final ConfigService configService;
+    private final TaskAdmissionService taskAdmissionService;
+    private final com.aimanga.v2.pipeline.ExportObjectService exportObjectService;
 
     @Transactional
     public TaskVO create(CreateTaskRequest request) {
@@ -71,51 +69,11 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
                 throw new BusinessException(400, "页面不属于当前作品");
             }
         }
-        // Serialize admission for this project so active-check, plan creation and Item initialization are atomic.
-        projectMapper.lockById(project.getId());
         String normalizedPayload = request.payload() == null ? "{}" : request.payload().toString();
-        TaskEntity active = baseMapper.selectOne(new LambdaQueryWrapper<TaskEntity>()
-                .eq(TaskEntity::getProjectId, project.getId())
-                .eq(request.chapterId() != null, TaskEntity::getChapterId, request.chapterId())
-                .isNull(request.chapterId() == null, TaskEntity::getChapterId)
-                .eq(TaskEntity::getTaskType, type)
-                .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING,
-                        TaskStatus.STOPPING, TaskStatus.PAUSED)
-                .orderByDesc(TaskEntity::getId)
-                .last("LIMIT 1"));
-        if (active != null) {
-            if (java.util.Objects.equals(active.getPayload(), normalizedPayload)) {
-                return toVO(active, project.getTitle());
-            }
-            throw new BusinessException(409, "已有相同类型的任务正在执行或暂停;请先继续或停止该任务");
-        }
-        TaskEntity task = new TaskEntity();
-        task.setUserId(CurrentUser.id());
-        task.setProjectId(project.getId());
-        task.setChapterId(request.chapterId());
-        task.setTaskType(type);
-        task.setStatus(initialStatus(project));
-        task.setPauseRequested(false);
-        task.setControlVersion(0L);
-        task.setPlanVersion(1);
-        task.setPriority(0);
-        task.setProgress(0);
-        task.setTotalCount(0);
-        task.setSuccessCount(0);
-        task.setFailCount(0);
-        task.setCurrentNo(0);
-        task.setMaxExecutionSeconds(Math.max(60, configMaxExecutionSeconds()));
-        task.setPayload(normalizedPayload);
-        task.setError("");
-        task.setCreateTime(LocalDateTime.now());
-        save(task);
-        taskPlanningService.initializePlan(task);
-        if (task.getStatus() == TaskStatus.PENDING) {
-            afterCommit(() -> safeEnqueue(task.getId()));
-        }
-        afterCommit(() -> publisher.publishCreated(task));
-        log.info("[task] 创建任务 type={} id={} projectId={}", type, task.getId(), project.getId());
-        return toVO(task, project.getTitle());
+        TaskAdmissionService.AdmissionResult admitted = taskAdmissionService.admit(
+                new TaskAdmissionService.AdmissionCommand(CurrentUser.id(), project.getId(),
+                        request.chapterId(), type, normalizedPayload));
+        return toVO(admitted.task(), project.getTitle());
     }
 
     static int initialStatus(Project project) {
@@ -184,16 +142,23 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
     /** 重试:终态任务重置为排队中并重新入队(保留断点 current_no;清执行锁/心跳;重置自动重试计数) */
     @Transactional
     public TaskEntity retry(Long taskId) {
-        TaskEntity task = requireAccessible(taskId);
+        TaskEntity visible = requireAccessible(taskId);
+        taskAdmissionService.lockProjectsFor(visible);
+        TaskEntity task = baseMapper.lockById(taskId);
+        if (task == null || (!CurrentUser.isAdmin() && !task.getUserId().equals(CurrentUser.id()))) {
+            throw new BusinessException(404, "任务不存在: " + taskId);
+        }
         int status = task.getStatus() == null ? TaskStatus.PENDING : task.getStatus();
         if (TaskStatus.active(status)) {
             throw new BusinessException(409, "任务进行中,不能重试");
         }
-        Project project = projectService.getById(task.getProjectId());
+        taskAdmissionService.assertRetrySlotAvailable(task);
+        Project project = projectMapper.selectById(task.getProjectId());
         int nextStatus = initialStatus(project == null ? new Project() : project);
         boolean planned = task.getPlanInitializedAt() != null && task.getPlanVersion() != null && task.getPlanVersion() > 0;
         TaskPlanningService.PlanStats planStats = null;
         if (planned) {
+            taskPlanningService.reopenMissingExportCheckpoints(task);
             taskPlanningService.reopenFailedForManualRetry(task);
             planStats = taskPlanningService.stats(task);
         }
@@ -228,7 +193,8 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
             afterCommit(() -> safeEnqueue(taskId));
         }
         TaskEntity latest = getById(taskId);
-        publisher.publishStatus(latest, TaskStatus.PENDING, "已重新入队");
+        afterCommit(() -> publisher.publishStatus(latest, nextStatus,
+                nextStatus == TaskStatus.PAUSED ? "项目已暂停，任务等待恢复" : "已重新入队"));
         return latest;
     }
 
@@ -262,12 +228,19 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
         return latest;
     }
 
+    @Transactional
     public void delete(Long taskId) {
-        TaskEntity task = requireAccessible(taskId);
+        TaskEntity visible = requireAccessible(taskId);
+        taskAdmissionService.lockProjectsFor(visible);
+        TaskEntity task = baseMapper.lockById(taskId);
+        if (task == null || (!CurrentUser.isAdmin() && !task.getUserId().equals(CurrentUser.id()))) {
+            throw new BusinessException(404, "任务不存在: " + taskId);
+        }
         int status = task.getStatus() == null ? TaskStatus.PENDING : task.getStatus();
         if (TaskStatus.active(status)) {
             throw new BusinessException(409, "任务进行中,请先停止后再删除");
         }
+        exportObjectService.requestTaskDeletion(taskId, "用户删除任务");
         removeById(taskId);
     }
 
@@ -313,112 +286,39 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
      * 系统内部入队(流水线链式调用,worker 线程无 Shiro 上下文):
      * userId 取作品归属,不做用户归属校验。
      */
-    @Transactional
     public TaskEntity createSystemTask(Long projectId, Long chapterId, String type, String payloadJson) {
         Project project = projectMapper.selectById(projectId);
         if (project == null) {
             throw new BusinessException(404, "作品不存在: " + projectId);
         }
-        TaskEntity task = new TaskEntity();
-        task.setUserId(project.getUserId());
-        task.setProjectId(projectId);
-        task.setChapterId(chapterId);
-        task.setTaskType(type);
-        task.setStatus(initialStatus(project));
-        task.setPauseRequested(false);
-        task.setControlVersion(0L);
-        task.setPlanVersion(1);
-        task.setPriority(0);
-        task.setProgress(0);
-        task.setTotalCount(0);
-        task.setSuccessCount(0);
-        task.setFailCount(0);
-        task.setCurrentNo(0);
-        task.setMaxExecutionSeconds(Math.max(60, configMaxExecutionSeconds()));
-        task.setPayload(payloadJson == null || payloadJson.isBlank() ? "{}" : payloadJson);
-        task.setError("");
-        task.setCreateTime(LocalDateTime.now());
-        save(task);
-        taskPlanningService.initializePlan(task);
-        if (task.getStatus() == TaskStatus.PENDING) {
-            afterCommit(() -> safeEnqueue(task.getId()));
-        }
-        afterCommit(() -> publisher.publishCreated(task));
-        return task;
+        return taskAdmissionService.admit(new TaskAdmissionService.AdmissionCommand(
+                project.getUserId(), projectId, chapterId, type, payloadJson)).task();
     }
 
     /**
      * 链式任务去重入队:同一 (projectId, chapterId, type) 在 PENDING/RUNNING 时只允许存在一个,
-     * 防止多个 SCRIPT 并发结束时重复入队 SHEET/ASSET。Redisson 短锁内查询 + 创建。
+     * 防止多个 SCRIPT 并发结束时重复入队 SHEET/ASSET。
      */
     public boolean enqueueUnique(Long projectId, Long chapterId, String type, String payloadJson) {
-        String lockKey = "aimanga:v2:enqueue:" + projectId + ":" + (chapterId == null ? 0 : chapterId) + ":" + type;
-        org.redisson.api.RLock lock = redissonClient.getLock(lockKey);
-        try {
-            if (!lock.tryLock(0, 10, java.util.concurrent.TimeUnit.SECONDS)) {
-                return false; // 另一个线程正在入队同一链任务
-            }
-            try {
-                Long active = baseMapper.selectCount(new LambdaQueryWrapper<TaskEntity>()
-                        .eq(TaskEntity::getProjectId, projectId)
-                        .eq(chapterId != null, TaskEntity::getChapterId, chapterId)
-                        .isNull(chapterId == null, TaskEntity::getChapterId)
-                        .eq(TaskEntity::getTaskType, type)
-                        .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING,
-                                TaskStatus.STOPPING, TaskStatus.PAUSED));
-                if (active != null && active > 0) {
-                    return false;
-                }
-                createSystemTask(projectId, chapterId, type, payloadJson);
-                return true;
-            } finally {
-                lock.unlock();
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return false;
-        }
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) throw new BusinessException(404, "作品不存在: " + projectId);
+        return taskAdmissionService.admit(new TaskAdmissionService.AdmissionCommand(
+                project.getUserId(), projectId, chapterId, type, payloadJson)).created();
     }
 
     /**
      * 确保同 (project, chapter, type) 只有一个活跃任务并返回它(Phase 5.11 T5.11.3)。
      * 已有 PENDING/RUNNING/STOPPING 任务 → 直接复用(不再创建第二个并行 Runner,
      * 用户新勾选的 Items 已在创建前落库,活跃 Runner 会自动领取);
-     * 没有则创建新任务。Redisson 短锁内查询+创建,连续快速点击不会产生重复任务。
+     * 没有则创建新任务。数据库项目锁串行化查重与创建,连续快速点击不会产生重复任务。
      */
     public TaskVO ensureUniqueActiveTask(Long projectId, Long chapterId, String type, String payloadJson) {
-        String lockKey = "aimanga:v2:enqueue:" + projectId + ":" + (chapterId == null ? 0 : chapterId) + ":" + type;
-        org.redisson.api.RLock lock = redissonClient.getLock(lockKey);
-        try {
-            if (!lock.tryLock(0, 10, java.util.concurrent.TimeUnit.SECONDS)) {
-                throw new BusinessException(409, "任务正在创建中,请稍候重试");
-            }
-            try {
-                TaskEntity active = baseMapper.selectOne(new LambdaQueryWrapper<TaskEntity>()
-                        .eq(TaskEntity::getProjectId, projectId)
-                        .eq(chapterId != null, TaskEntity::getChapterId, chapterId)
-                        .isNull(chapterId == null, TaskEntity::getChapterId)
-                        .eq(TaskEntity::getTaskType, type)
-                        .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING,
-                                TaskStatus.STOPPING, TaskStatus.PAUSED)
-                        .orderByDesc(TaskEntity::getId)
-                        .last("LIMIT 1"));
-                if (active != null) {
-                    if (!java.util.Objects.equals(active.getPayload(), payloadJson == null || payloadJson.isBlank() ? "{}" : payloadJson)) {
-                        throw new BusinessException(409, "已有相同类型的任务正在执行或暂停;请先继续或停止该任务");
-                    }
-                    log.info("[task] 复用活跃任务 type={} id={} projectId={}", type, active.getId(), projectId);
-                    return toVO(active);
-                }
-                TaskEntity created = createSystemTask(projectId, chapterId, type, payloadJson);
-                return toVO(created);
-            } finally {
-                lock.unlock();
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new BusinessException(409, "任务正在创建中,请稍候重试");
-        }
+        Project project = projectMapper.selectById(projectId);
+        if (project == null) throw new BusinessException(404, "作品不存在: " + projectId);
+        TaskAdmissionService.AdmissionResult result = taskAdmissionService.admit(
+                new TaskAdmissionService.AdmissionCommand(project.getUserId(), projectId,
+                        chapterId, type, payloadJson));
+        return toVO(result.task());
     }
 
     private Long extractPageId(com.fasterxml.jackson.databind.JsonNode payload) {
@@ -440,11 +340,6 @@ public class TaskService extends ServiceImpl<TaskMapper, TaskEntity> {
                 action.run();
             }
         });
-    }
-
-    private int configMaxExecutionSeconds() {
-        return Math.min(86_400, Math.max(60,
-                configService.getInt("task_max_execution_seconds", 3600)));
     }
 
     private void safeEnqueue(Long taskId) {

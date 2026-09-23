@@ -24,7 +24,8 @@ public class ConfigService {
     /** 值为密钥的键名片段(脱敏展示) */
     private static final Set<String> SECRET_MARKERS = Set.of("api_key", "access_secret", "password");
     private static final Set<String> POSITIVE_LONG_KEYS = Set.of(
-            "export_max_bytes", "export_temp_max_bytes");
+            "export_max_bytes", "export_temp_max_bytes", "export_checkpoint_ttl_hours",
+            "export_download_max_seconds", "export_upload_timeout_seconds");
 
     private final SystemConfigMapper mapper;
     private final Map<String, String> cache = new ConcurrentHashMap<>();

@@ -4,6 +4,7 @@ dist/
 dist-ssr/
 server/target/
 coverage/
+frontend/frontend-dist.zip
 
 # ---------- 日志 ----------
 logs/

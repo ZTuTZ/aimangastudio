@@ -116,6 +116,51 @@ public class OssStorageService implements StorageService {
     }
 
     @Override
+    public void saveExportFile(String key, java.nio.file.Path file) {
+        validateExportKey(key);
+        client().putObject(bucket(), key, file.toFile());
+    }
+
+    @Override
+    public void copyExportFile(String key, java.nio.file.Path target) {
+        validateExportKey(key);
+        try (var object = client().getObject(bucket(), key);
+             var in = object.getObjectContent()) {
+            java.nio.file.Files.copy(in, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (Exception e) {
+            throw new BusinessException(502, "读取导出对象失败: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public void writeExportFile(String key, java.io.OutputStream target) {
+        validateExportKey(key);
+        try (var object = client().getObject(bucket(), key);
+             var in = object.getObjectContent()) {
+            in.transferTo(target);
+        } catch (Exception e) {
+            throw new BusinessException(502, "读取导出对象失败: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public void deleteExportFile(String key) {
+        validateExportKey(key);
+        client().deleteObject(bucket(), key);
+    }
+
+    @Override
+    public String exportUrl(String key) {
+        validateExportKey(key);
+        return publicUrl(key);
+    }
+
+    @Override
+    public String exportKey(String url) {
+        return ownedKey(url);
+    }
+
+    @Override
     public String thumbnail(String url) {
         String process = configService.getString("oss_image_process");
         if (url == null || process == null || process.isBlank()) {
@@ -183,6 +228,13 @@ public class OssStorageService implements StorageService {
             throw new BusinessException(400, "拒绝操作非导出产物");
         }
         return key;
+    }
+
+    private static void validateExportKey(String key) {
+        if (key == null || key.contains("..") || key.startsWith("/")
+                || !(key.startsWith("exports/checkpoints/") || key.startsWith("exports/final/"))) {
+            throw new BusinessException(400, "非法导出对象 key");
+        }
     }
 
     private String buildKey(String dir, Long userId, String ext) {

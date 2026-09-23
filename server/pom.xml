@@ -231,4 +231,28 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <id>export-stress</id>
+            <properties>
+                <export.stress.enabled>true</export.stress.enabled>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>3.5.2</version>
+                        <configuration>
+                            <argLine>-Xmx512m</argLine>
+                            <systemPropertyVariables>
+                                <export.stress.enabled>${export.stress.enabled}</export.stress.enabled>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

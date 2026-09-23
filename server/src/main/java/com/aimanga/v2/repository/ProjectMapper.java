@@ -13,6 +13,15 @@ public interface ProjectMapper extends BaseMapper<Project> {
     @Select("SELECT * FROM project WHERE id = #{id} FOR UPDATE")
     Project lockById(@Param("id") Long id);
 
+    @Select({
+            "<script>",
+            "SELECT * FROM project WHERE id IN",
+            "<foreach collection='ids' item='id' open='(' separator=',' close=')'>#{id}</foreach>",
+            "ORDER BY id FOR UPDATE",
+            "</script>"
+    })
+    List<Project> lockByIds(@Param("ids") List<Long> ids);
+
     /**
      * 分页计数(不触达 LONGTEXT,不关联子查询,走 idx_project_user 索引)。
      * keyword 已在服务层做 LIKE 转义。

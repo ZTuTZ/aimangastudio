@@ -23,6 +23,20 @@ public interface StorageService {
     /** Delete an artifact owned by this storage backend. */
     void deleteStoredFile(String url);
 
+    /** Upload to a pre-registered, server-generated exports key. */
+    void saveExportFile(String key, java.nio.file.Path file);
+
+    void copyExportFile(String key, java.nio.file.Path target);
+
+    void writeExportFile(String key, java.io.OutputStream target);
+
+    void deleteExportFile(String key);
+
+    String exportUrl(String key);
+
+    /** Convert a URL owned by this backend to its exports key. */
+    String exportKey(String url);
+
     /** 是否已配置(未配置时上传应返回明确报错) */
     boolean isConfigured();
 
