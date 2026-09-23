@@ -179,7 +179,10 @@ class TaskAdmissionIT {
     }
 
     @SpringBootConfiguration
-    @EnableAutoConfiguration(excludeName = "org.redisson.spring.starter.RedissonAutoConfigurationV2")
+    @EnableAutoConfiguration(excludeName = {
+            "org.redisson.spring.starter.RedissonAutoConfigurationV2",
+            "org.apache.shiro.spring.boot.autoconfigure.ShiroAutoConfiguration"
+    })
     @MapperScan("com.aimanga.v2.repository")
     @Import({TaskAdmissionService.class, Mocks.class})
     static class TestApplication { }
