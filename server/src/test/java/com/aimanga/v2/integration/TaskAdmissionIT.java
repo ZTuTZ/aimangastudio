@@ -89,8 +89,8 @@ class TaskAdmissionIT {
     void planningFailureRollsBackTaskPlanAndStageItem() {
         doAnswer(invocation -> {
             TaskEntity task = invocation.getArgument(0);
-            jdbc.update("INSERT INTO task_plan_unit(task_id,plan_version,unit_no,stage_type,business_type,business_id,input_snapshot,status) " +
-                    "VALUES (?,?,?,?,?,?,?,?)", task.getId(), 1, 1, "SCRIPT", "PROJECT", 7, "{}", 0);
+            jdbc.update("INSERT INTO task_plan_unit(task_id,plan_version,stage_type,business_type,business_id,input_snapshot,status) " +
+                    "VALUES (?,?,?,?,?,?,?)", task.getId(), 1, "SCRIPT", "PROJECT", 7, "{}", 0);
             jdbc.update("INSERT INTO pipeline_stage_item(project_id,stage_type,business_type,business_id,status) " +
                     "VALUES (7,'SCRIPT','PROJECT',7,0)");
             throw new IllegalStateException("injected planning failure");
