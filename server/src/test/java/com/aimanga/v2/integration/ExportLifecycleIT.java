@@ -27,17 +27,28 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.OutputStream;
 import java.nio.file.Files;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.HexFormat;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
@@ -103,6 +114,109 @@ class ExportLifecycleIT {
         assertThat(jdbc.queryForObject("SELECT JSON_UNQUOTE(JSON_EXTRACT(result,'$.sha256')) FROM task WHERE id=70", String.class))
                 .isEqualTo(objectB.getSha256());
         assertThat(objectMapper.selectById(objectA.getId()).getState()).isEqualTo(ExportStoredObject.STATE_RETAINED);
+    }
+
+    @Test
+    void blockedOldUploadCannotPublishOrDeleteNewOwnersArtifact() throws Exception {
+        var attemptA = artifactService.beginAttempt(new TaskExecutionOwner(70L, "owner-a"));
+        ExportStoredObject objectA = objectService.registerUpload(70L, null, attemptA.artifactId(),
+                attemptA.generation(), ExportStoredObject.KIND_FINAL, attemptA.claimToken(), 1L);
+        CountDownLatch oldUploadStarted = new CountDownLatch(1);
+        CountDownLatch releaseOldUpload = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            if (objectA.getStorageKey().equals(invocation.getArgument(0))) {
+                oldUploadStarted.countDown();
+                if (!releaseOldUpload.await(10, TimeUnit.SECONDS)) {
+                    throw new AssertionError("old upload did not resume");
+                }
+            }
+            return null;
+        }).when(storage).saveExportFile(anyString(), any(java.nio.file.Path.class));
+
+        var fileA = Files.createTempFile("old-export-", ".zip");
+        Files.writeString(fileA, "old");
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            var oldUpload = executor.submit(() -> objectService.upload(objectA, fileA, Files.size(fileA), "old-sha"));
+            assertThat(oldUploadStarted.await(10, TimeUnit.SECONDS)).isTrue();
+
+            jdbc.update("UPDATE task SET claim_token='owner-b', lease_until=DATE_ADD(NOW(),INTERVAL 1 HOUR) WHERE id=70");
+            var attemptB = artifactService.beginAttempt(new TaskExecutionOwner(70L, "owner-b"));
+            ExportStoredObject objectB = upload(attemptB, "new");
+            artifactService.publish(attemptB, objectB.getId(), json.createObjectNode().put("success", 1));
+
+            releaseOldUpload.countDown();
+            oldUpload.get(10, TimeUnit.SECONDS);
+            assertThatThrownBy(() -> artifactService.publish(attemptA, objectA.getId(), json.createObjectNode()))
+                    .isInstanceOf(com.aimanga.v2.common.BusinessException.class)
+                    .hasMessageContaining("所有权");
+            objectService.requestDeletion(objectA.getId(), "old owner lost", 0);
+            jdbc.update("UPDATE export_stored_object SET delete_after=DATE_SUB(NOW(),INTERVAL 1 SECOND) WHERE id=?",
+                    objectA.getId());
+            objectService.cleanup();
+
+            assertThat(objectMapper.selectById(objectA.getId()).getState())
+                    .isEqualTo(ExportStoredObject.STATE_DELETED);
+            assertThat(objectMapper.selectById(objectB.getId()).getState())
+                    .isEqualTo(ExportStoredObject.STATE_RETAINED);
+            assertThat(artifactMapper.selectByTaskId(70L).getCurrentObjectId()).isEqualTo(objectB.getId());
+            assertThat(jdbc.queryForObject("SELECT JSON_UNQUOTE(JSON_EXTRACT(result,'$.sha256')) FROM task WHERE id=70",
+                    String.class)).isEqualTo(objectB.getSha256());
+        } finally {
+            releaseOldUpload.countDown();
+            executor.shutdownNow();
+            Files.deleteIfExists(fileA);
+        }
+    }
+
+    @Test
+    void newGenerationAfterPartialResultReplacesZipAndDatabaseDigest() throws Exception {
+        Map<String, byte[]> stored = new ConcurrentHashMap<>();
+        doAnswer(invocation -> {
+            stored.put(invocation.getArgument(0), Files.readAllBytes(invocation.getArgument(1)));
+            return null;
+        }).when(storage).saveExportFile(anyString(), any(java.nio.file.Path.class));
+        doAnswer(invocation -> {
+            byte[] bytes = stored.get(invocation.getArgument(0));
+            assertThat(bytes).isNotNull();
+            ((OutputStream) invocation.getArgument(1)).write(bytes);
+            return null;
+        }).when(storage).writeExportFile(anyString(), any(OutputStream.class));
+
+        var firstAttempt = artifactService.beginAttempt(new TaskExecutionOwner(70L, "owner-a"));
+        ExportStoredObject first = uploadZip(firstAttempt, Map.of("comic-7.txt", "first"));
+        artifactService.publish(firstAttempt, first.getId(),
+                json.createObjectNode().put("total", 2).put("success", 1).put("failed", 1));
+        jdbc.update("UPDATE task SET status=4, claim_token=NULL, lease_until=NULL WHERE id=70");
+
+        jdbc.update("UPDATE task SET status=1, claim_token='owner-b', " +
+                "lease_until=DATE_ADD(NOW(),INTERVAL 1 HOUR) WHERE id=70");
+        var retryAttempt = artifactService.beginAttempt(new TaskExecutionOwner(70L, "owner-b"));
+        ExportStoredObject replacement = uploadZip(retryAttempt,
+                Map.of("comic-7.txt", "first", "comic-8.txt", "recovered"));
+        artifactService.publish(retryAttempt, replacement.getId(),
+                json.createObjectNode().put("total", 2).put("success", 2).put("failed", 0));
+
+        ByteArrayOutputStream download = new ByteArrayOutputStream();
+        objectService.writeTo(replacement.getId(), download);
+        Map<String, String> entries = new HashMap<>();
+        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(download.toByteArray()))) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                entries.put(entry.getName(), new String(zip.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+            }
+        }
+        assertThat(entries).containsExactlyInAnyOrderEntriesOf(
+                Map.of("comic-7.txt", "first", "comic-8.txt", "recovered"));
+        var artifact = artifactMapper.selectByTaskId(70L);
+        assertThat(artifact.getCurrentObjectId()).isEqualTo(replacement.getId());
+        assertThat(artifact.getGeneration()).isEqualTo(retryAttempt.generation());
+        assertThat(artifact.getSha256()).isEqualTo(replacement.getSha256());
+        assertThat(artifact.getByteSize()).isEqualTo((long) download.size());
+        assertThat(jdbc.queryForObject("SELECT JSON_UNQUOTE(JSON_EXTRACT(result,'$.sha256')) FROM task WHERE id=70",
+                String.class)).isEqualTo(replacement.getSha256());
+        assertThat(objectMapper.selectById(first.getId()).getState())
+                .isEqualTo(ExportStoredObject.STATE_DELETE_PENDING);
     }
 
     @Test
@@ -223,6 +337,27 @@ class ExportLifecycleIT {
             ExportStoredObject object = objectService.registerUpload(70L, null, attempt.artifactId(),
                     attempt.generation(), ExportStoredObject.KIND_FINAL, attempt.claimToken(), 1L);
             return objectService.upload(object, file, Files.size(file), marker + "-sha");
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    private ExportStoredObject uploadZip(ExportArtifactService.ExportAttempt attempt,
+                                         Map<String, String> entries) throws Exception {
+        var file = Files.createTempFile("export-life-", ".zip");
+        try {
+            try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(file))) {
+                for (var entry : entries.entrySet()) {
+                    zip.putNextEntry(new ZipEntry(entry.getKey()));
+                    zip.write(entry.getValue().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    zip.closeEntry();
+                }
+            }
+            byte[] bytes = Files.readAllBytes(file);
+            String checksum = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+            ExportStoredObject object = objectService.registerUpload(70L, null, attempt.artifactId(),
+                    attempt.generation(), ExportStoredObject.KIND_FINAL, attempt.claimToken(), 1L);
+            return objectService.upload(object, file, bytes.length, checksum);
         } finally {
             Files.deleteIfExists(file);
         }
