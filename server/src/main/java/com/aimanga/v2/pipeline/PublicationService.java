@@ -23,6 +23,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -60,6 +61,7 @@ public class PublicationService {
     private final ObjectMapper objectMapper;
     private final RemoteImageFetcher remoteImageFetcher;
     private final PlatformTransactionManager transactionManager;
+    private final ExportTempFiles tempFiles;
 
     // ---------- T7.3 校验 ----------
 
@@ -257,10 +259,8 @@ public class PublicationService {
     }
 
     private void writeSnapshotZip(ComicManifest snapshot, java.io.OutputStream out) {
-        java.nio.file.Path tempDir = null;
+        Map<String, ExportTempFiles.Handle> downloaded = new LinkedHashMap<>();
         try {
-            tempDir = java.nio.file.Files.createTempDirectory("aimanga-export-");
-            Map<String, java.nio.file.Path> downloaded = new LinkedHashMap<>();
             Map<String, String> extensions = new LinkedHashMap<>();
             for (ComicManifestChapter chapter : snapshot.chapters()) {
                 for (ComicManifestPage page : chapter.pages()) {
@@ -268,9 +268,12 @@ public class PublicationService {
                     try (RemoteImageFetcher.FetchResult fetch = remoteImageFetcher.fetchStream(page.imageUrl());
                          InputStream in = fetch.inputStream()) {
                         String ext = extensionForMime(fetch.mime());
-                        java.nio.file.Path file = tempDir.resolve("page-" + chapter.chapterNo() + "-" + page.pageNo() + "." + ext);
-                        java.nio.file.Files.copy(in, file);
-                        downloaded.put(key, file);
+                        ExportTempFiles.Handle image = tempFiles.create(
+                                "page-" + chapter.chapterNo() + "-" + page.pageNo() + "-", "." + ext);
+                        downloaded.put(key, image);
+                        try (OutputStream imageOut = tempFiles.open(image)) {
+                            in.transferTo(imageOut);
+                        }
                         extensions.put(key, ext);
                     }
                 }
@@ -285,7 +288,7 @@ public class PublicationService {
             for (ComicManifestChapter chapter : manifest.chapters()) {
                 for (ComicManifestPage page : chapter.pages()) {
                     zip.putNextEntry(new ZipEntry(page.filePath()));
-                    java.nio.file.Files.copy(downloaded.get(chapter.chapterNo() + ":" + page.pageNo()), zip);
+                    java.nio.file.Files.copy(downloaded.get(chapter.chapterNo() + ":" + page.pageNo()).path(), zip);
                     zip.closeEntry();
                     pages++;
                 }
@@ -299,13 +302,7 @@ public class PublicationService {
         } catch (Exception e) {
             throw new BusinessException(500, "导出打包失败: " + e.getMessage());
         } finally {
-            if (tempDir != null) {
-                try (var paths = java.nio.file.Files.walk(tempDir)) {
-                    paths.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
-                        try { java.nio.file.Files.deleteIfExists(path); } catch (Exception ignored) { }
-                    });
-                } catch (Exception ignored) { }
-            }
+            downloaded.values().forEach(ExportTempFiles.Handle::close);
         }
     }
 
