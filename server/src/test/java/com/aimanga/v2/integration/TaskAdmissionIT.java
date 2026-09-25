@@ -1,6 +1,7 @@
 package com.aimanga.v2.integration;
 
 import com.aimanga.v2.model.TaskEntity;
+import com.aimanga.v2.common.BusinessException;
 import com.aimanga.v2.service.ConfigService;
 import com.aimanga.v2.service.TaskAdmissionService;
 import com.aimanga.v2.service.TaskPlanningService;
@@ -168,6 +169,72 @@ class TaskAdmissionIT {
             start.countDown();
             executor.shutdownNow();
         }
+    }
+
+    @Test
+    void pausedTaskStillBlocksConflictingAdmission() {
+        jdbc.update("UPDATE project SET pause_requested=1 WHERE id=7");
+        TaskAdmissionService.AdmissionResult first = admissionService.admit(command());
+        assertThat(first.task().getStatus()).isEqualTo(com.aimanga.v2.task.TaskStatus.PAUSED);
+
+        assertThatThrownBy(() -> admissionService.admit(new TaskAdmissionService.AdmissionCommand(
+                1L, 7L, null, "SCRIPT", "{\"forceScript\":true}")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("范围重叠");
+        assertThat(count("task")).isEqualTo(1);
+        verify(taskQueue, never()).enqueue(anyLong());
+    }
+
+    @Test
+    void concurrentDifferentPayloadsCannotBothClaimTheSameTaskSlot() throws Exception {
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            List<java.util.concurrent.Future<Object>> futures = new ArrayList<>();
+            for (String payload : List.of("{\"forceScript\":true}", "{\"forceScript\":false}")) {
+                futures.add(executor.submit(() -> {
+                    ready.countDown();
+                    assertThat(start.await(10, TimeUnit.SECONDS)).isTrue();
+                    try {
+                        return admissionService.admit(new TaskAdmissionService.AdmissionCommand(
+                                1L, 7L, null, "SCRIPT", payload));
+                    } catch (BusinessException conflict) {
+                        return conflict;
+                    }
+                }));
+            }
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            List<Object> outcomes = new ArrayList<>();
+            for (var future : futures) outcomes.add(future.get(10, TimeUnit.SECONDS));
+
+            assertThat(outcomes.stream().filter(TaskAdmissionService.AdmissionResult.class::isInstance).count())
+                    .isEqualTo(1);
+            assertThat(outcomes.stream().filter(BusinessException.class::isInstance).count()).isEqualTo(1);
+            assertThat(outcomes.stream().filter(BusinessException.class::isInstance)
+                    .map(BusinessException.class::cast).findFirst().orElseThrow().getStatus()).isEqualTo(409);
+            assertThat(count("task")).isEqualTo(1);
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void overlappingExportProjectsCannotBeAdmittedFromDifferentAnchorProjects() {
+        jdbc.update("INSERT INTO project(id,content_uid,user_id,title,pause_requested,control_version) " +
+                "VALUES (8,'00000000-0000-0000-0000-000000000008',1,'第二部作品',0,0)");
+        TaskAdmissionService.AdmissionResult first = admissionService.admit(
+                new TaskAdmissionService.AdmissionCommand(1L, 7L, null, "EXPORT",
+                        "{\"projectIds\":[7,8]}"));
+        assertThat(first.created()).isTrue();
+
+        assertThatThrownBy(() -> admissionService.admit(new TaskAdmissionService.AdmissionCommand(
+                1L, 8L, null, "EXPORT", "{\"projectIds\":[8]}")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("范围重叠");
+        assertThat(count("task")).isEqualTo(1);
     }
 
     private TaskAdmissionService.AdmissionCommand command() {
