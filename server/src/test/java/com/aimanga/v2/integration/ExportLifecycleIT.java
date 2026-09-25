@@ -27,13 +27,18 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.time.LocalDateTime;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.when;
@@ -126,6 +131,71 @@ class ExportLifecycleIT {
         assertThat(objectMapper.claimCleanup(object.getId(), UUID.randomUUID().toString(), 300)).isZero();
         assertThat(objectMapper.selectById(object.getId()).getState())
                 .isEqualTo(ExportStoredObject.STATE_UPLOADING);
+    }
+
+    @Test
+    void cleanupWaitsForActiveDownloadAndDeletesAfterReadLeaseEnds() throws Exception {
+        var attempt = artifactService.beginAttempt(new TaskExecutionOwner(70L, "owner-a"));
+        ExportStoredObject object = upload(attempt, "download");
+        CountDownLatch readStarted = new CountDownLatch(1);
+        CountDownLatch finishRead = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            readStarted.countDown();
+            if (!finishRead.await(10, TimeUnit.SECONDS)) throw new AssertionError("download did not resume");
+            java.io.OutputStream target = invocation.getArgument(1);
+            target.write("download".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return null;
+        }).when(storage).writeExportFile(org.mockito.ArgumentMatchers.eq(object.getStorageKey()),
+                org.mockito.ArgumentMatchers.any(java.io.OutputStream.class));
+
+        ByteArrayOutputStream received = new ByteArrayOutputStream();
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            var download = executor.submit(() -> objectService.streamWithLease(object.getId(), received));
+            assertThat(readStarted.await(10, TimeUnit.SECONDS)).isTrue();
+            objectService.requestDeletion(object.getId(), "expired while downloading", 0);
+            jdbc.update("UPDATE export_stored_object SET delete_after=DATE_SUB(NOW(),INTERVAL 1 SECOND) WHERE id=?",
+                    object.getId());
+            objectService.cleanup();
+
+            assertThat(objectMapper.selectById(object.getId()).getState())
+                    .isEqualTo(ExportStoredObject.STATE_DELETE_PENDING);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM export_object_read_lease WHERE object_id=?",
+                    Integer.class, object.getId())).isEqualTo(1);
+
+            finishRead.countDown();
+            download.get(10, TimeUnit.SECONDS);
+            assertThat(received.toString(java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("download");
+            objectService.cleanup();
+            assertThat(objectMapper.selectById(object.getId()).getState())
+                    .isEqualTo(ExportStoredObject.STATE_DELETED);
+        } finally {
+            finishRead.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void cleanupReclaimsObjectAfterRemoteDeleteButBeforeDatabaseAcknowledgement() throws Exception {
+        var attempt = artifactService.beginAttempt(new TaskExecutionOwner(70L, "owner-a"));
+        ExportStoredObject object = upload(attempt, "crash-window");
+        objectService.requestDeletion(object.getId(), "expired", 0);
+        jdbc.update("UPDATE export_stored_object SET delete_after=DATE_SUB(NOW(),INTERVAL 1 SECOND) WHERE id=?",
+                object.getId());
+
+        assertThat(objectMapper.claimCleanup(object.getId(), "crashed-worker", 300)).isEqualTo(1);
+        storage.deleteExportFile(object.getStorageKey());
+        assertThat(objectMapper.selectById(object.getId()).getState())
+                .isEqualTo(ExportStoredObject.STATE_DELETING);
+
+        jdbc.update("UPDATE export_stored_object SET cleanup_lease_until=DATE_SUB(NOW(),INTERVAL 1 SECOND) WHERE id=?",
+                object.getId());
+        objectService.cleanup();
+
+        assertThat(objectMapper.selectById(object.getId()).getState())
+                .isEqualTo(ExportStoredObject.STATE_DELETED);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM export_stored_object WHERE id=?",
+                Integer.class, object.getId())).isEqualTo(1);
     }
 
     @Test
