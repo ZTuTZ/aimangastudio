@@ -130,6 +130,8 @@ class InfrastructureIT {
 
         Flyway.configure().dataSource(url, MYSQL.getUsername(), MYSQL.getPassword())
                 .locations("classpath:db/migration").load().migrate();
+        Flyway.configure().dataSource(url, MYSQL.getUsername(), MYSQL.getPassword())
+                .locations("classpath:db/migration").load().migrate();
 
         try (var connection = DriverManager.getConnection(url, MYSQL.getUsername(), MYSQL.getPassword());
              var statement = connection.createStatement()) {

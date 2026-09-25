@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -61,7 +62,11 @@ public class ExportTempFiles {
         OutputStream raw = Files.newOutputStream(handle.path);
         long previous = handle.accounted.getAndSet(0);
         if (previous > 0) used.addAndGet(-previous);
-        return new BudgetOutputStream(raw, handle);
+        return budget(handle, raw);
+    }
+
+    OutputStream budget(Handle handle, OutputStream target) {
+        return new BudgetOutputStream(target, handle);
     }
 
     public OutputStream limited(OutputStream target, long limit) {
@@ -98,10 +103,12 @@ public class ExportTempFiles {
     private final class BudgetOutputStream extends FilterOutputStream {
         private final Handle handle;
         private BudgetOutputStream(OutputStream out, Handle handle) { super(out); this.handle = handle; }
-        @Override public void write(int b) throws IOException { reserve(1); try { out.write(b); } catch (IOException e) { rollback(1); throw e; } }
+        // A failed write may have persisted some bytes. Keep the full reservation until deletion.
+        @Override public void write(int b) throws IOException { reserve(1); out.write(b); }
         @Override public void write(byte[] b, int off, int len) throws IOException {
+            Objects.checkFromIndexSize(off, len, b.length);
             reserve(len);
-            try { out.write(b, off, len); } catch (IOException e) { rollback(len); throw e; }
+            out.write(b, off, len);
         }
         private void reserve(long bytes) throws IOException {
             long limit = configService.getLong("export_temp_max_bytes", 2_147_483_648L);
@@ -114,7 +121,6 @@ public class ExportTempFiles {
                 }
             }
         }
-        private void rollback(long bytes) { used.addAndGet(-bytes); handle.accounted.addAndGet(-bytes); }
     }
 
     static final class SizeLimitOutputStream extends FilterOutputStream {

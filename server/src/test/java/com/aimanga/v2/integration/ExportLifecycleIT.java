@@ -29,6 +29,7 @@ import org.testcontainers.utility.DockerImageName;
 
 import java.nio.file.Files;
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -109,6 +110,40 @@ class ExportLifecycleIT {
         assertThat(objectMapper.selectById(object.getId())).isNotNull();
         assertThat(objectMapper.selectById(object.getId()).getState())
                 .isEqualTo(ExportStoredObject.STATE_DELETE_PENDING);
+    }
+
+    @Test
+    void staleUploadCleanupCandidateCannotBeClaimedAfterTaskResumes() {
+        ExportStoredObject object = objectService.registerUpload(70L, null, null, 1,
+                ExportStoredObject.KIND_FINAL, "owner-a", 1L);
+        jdbc.update("UPDATE export_stored_object SET upload_deadline=DATE_SUB(NOW(),INTERVAL 1 SECOND) WHERE id=?",
+                object.getId());
+        jdbc.update("UPDATE task SET status=3 WHERE id=70");
+        assertThat(objectMapper.selectCleanupCandidates())
+                .extracting(ExportStoredObject::getId).contains(object.getId());
+
+        jdbc.update("UPDATE task SET status=1 WHERE id=70");
+        assertThat(objectMapper.claimCleanup(object.getId(), UUID.randomUUID().toString(), 300)).isZero();
+        assertThat(objectMapper.selectById(object.getId()).getState())
+                .isEqualTo(ExportStoredObject.STATE_UPLOADING);
+    }
+
+    @Test
+    void legacyFinalBackfillIsIdempotentAcrossRepeatedRuns() {
+        String url = "https://bucket/exports/final/legacy.zip";
+        when(storage.exportKey(url)).thenReturn("exports/final/legacy.zip");
+        jdbc.update("INSERT INTO export_artifact(task_id,user_id,storage_url,file_name,byte_size,sha256,status,expires_at) " +
+                "VALUES (70,1,?,'legacy.zip',10,?,1,DATE_ADD(NOW(),INTERVAL 1 DAY))",
+                url, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+        objectService.backfillLegacyObjects();
+        objectService.backfillLegacyObjects();
+
+        Long objectId = jdbc.queryForObject("SELECT current_object_id FROM export_artifact WHERE task_id=70", Long.class);
+        assertThat(objectId).isNotNull();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM export_stored_object WHERE storage_key='exports/final/legacy.zip'",
+                Integer.class)).isEqualTo(1);
+        assertThat(objectMapper.selectById(objectId).getState()).isEqualTo(ExportStoredObject.STATE_RETAINED);
     }
 
     private ExportStoredObject upload(ExportArtifactService.ExportAttempt attempt, String marker) throws Exception {

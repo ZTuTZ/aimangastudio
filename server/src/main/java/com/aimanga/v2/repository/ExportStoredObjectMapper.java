@@ -41,7 +41,9 @@ public interface ExportStoredObjectMapper extends BaseMapper<ExportStoredObject>
 
     @Update("UPDATE export_stored_object o SET o.state='DELETING', o.cleanup_token=#{token}, " +
             "o.cleanup_lease_until=DATE_ADD(NOW(), INTERVAL #{leaseSeconds} SECOND), o.update_time=NOW() " +
-            "WHERE o.id=#{id} AND (o.state='DELETE_PENDING' OR o.state='UPLOADING' OR " +
+            "WHERE o.id=#{id} AND (o.state='DELETE_PENDING' OR " +
+            "(o.state='UPLOADING' AND o.upload_deadline<NOW() " +
+            "AND NOT EXISTS (SELECT 1 FROM task t WHERE t.id=o.task_id AND t.status IN (0,1,6,7))) OR " +
             "(o.state='DELETING' AND o.cleanup_lease_until<NOW())) " +
             "AND NOT EXISTS (SELECT 1 FROM export_object_read_lease l WHERE l.object_id=o.id AND l.lease_until>NOW())")
     int claimCleanup(@Param("id") Long id, @Param("token") String token,
