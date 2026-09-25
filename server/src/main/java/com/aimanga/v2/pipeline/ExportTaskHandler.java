@@ -131,31 +131,37 @@ public class ExportTaskHandler implements TaskHandler {
                         try (var checkpointTemp = tempFiles.create("checkpoint-", ".zip")) {
                             Path checkpoint = checkpointTemp.path();
                             var result = objectMapper.readTree(unit.getResultRef());
+                            boolean checkpointReady = true;
                             try {
-                                loadVerifiedCheckpoint(result, checkpointTemp);
-                            } catch (Exception firstFailure) {
-                                long oldObjectId = result.path("objectId").asLong(0);
-                                String rebuilt = exportProject(task, attempt, unit.getId(), unit.getBusinessId());
-                                planningService.replaceSuccessfulResult(unit.getId(), rebuilt);
-                                result = objectMapper.readTree(rebuilt);
-                                loadVerifiedCheckpoint(result, checkpointTemp);
-                                if (oldObjectId > 0) {
-                                    objectService.requestDeletion(oldObjectId, "检查点校验失败后已重建", 0);
+                                try {
+                                    loadVerifiedCheckpoint(result, checkpointTemp);
+                                } catch (Exception firstFailure) {
+                                    long oldObjectId = result.path("objectId").asLong(0);
+                                    String rebuilt = exportProject(task, attempt, unit.getId(), unit.getBusinessId());
+                                    planningService.replaceSuccessfulResult(unit.getId(), rebuilt);
+                                    result = objectMapper.readTree(rebuilt);
+                                    loadVerifiedCheckpoint(result, checkpointTemp);
+                                    if (oldObjectId > 0) {
+                                        objectService.requestDeletion(oldObjectId, "检查点校验失败后已重建", 0);
+                                    }
                                 }
+                            } catch (BusinessException e) {
+                                checkpointReady = false;
+                                item.put("exported", false);
+                                item.put("error", e.getMessage());
                             }
-                            long bytes = Files.size(checkpoint);
-                            enforceQuota(totalBytes + bytes);
-                            zip.putNextEntry(new ZipEntry("comic-" + unit.getBusinessId() + ".zip"));
-                            Files.copy(checkpoint, zip);
-                            zip.closeEntry();
-                            totalBytes += bytes;
-                            item.put("exported", true);
-                            item.put("bytes", bytes);
-                            item.put("sha256", result.path("sha256").asText());
-                            success++;
-                        } catch (BusinessException e) {
-                            item.put("exported", false);
-                            item.put("error", e.getMessage());
+                            if (checkpointReady) {
+                                long bytes = Files.size(checkpoint);
+                                enforceQuota(totalBytes + bytes);
+                                zip.putNextEntry(new ZipEntry("comic-" + unit.getBusinessId() + ".zip"));
+                                Files.copy(checkpoint, zip);
+                                zip.closeEntry();
+                                totalBytes += bytes;
+                                item.put("exported", true);
+                                item.put("bytes", bytes);
+                                item.put("sha256", result.path("sha256").asText());
+                                success++;
+                            }
                         }
                     } else {
                         item.put("exported", false);
