@@ -9,6 +9,7 @@ import com.aimanga.v2.service.TaskPlanningService;
 import com.aimanga.v2.storage.StorageService;
 import com.aimanga.v2.task.OperationalMetrics;
 import com.aimanga.v2.task.TaskRuntime;
+import com.aimanga.v2.task.TaskStopSignal;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
@@ -21,7 +22,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -75,6 +79,51 @@ class ExportTaskHandlerQuotaTest {
         assertThatThrownBy(() -> handler.run(task, runtime))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("导出大小超过限制");
+        verify(artifacts, never()).publish(any(), anyLong(), any());
+    }
+
+    @Test
+    void stopAfterFinalUploadQueuesUnpublishedObjectForDeletion() throws Exception {
+        TaskPlanningService planning = mock(TaskPlanningService.class);
+        PipelineStageService stages = mock(PipelineStageService.class);
+        ConcurrentStageRunner runner = mock(ConcurrentStageRunner.class);
+        PublicationService publication = mock(PublicationService.class);
+        StorageService storage = mock(StorageService.class);
+        ConfigService config = mock(ConfigService.class);
+        OperationalMetrics metrics = mock(OperationalMetrics.class);
+        StageItemCommitService commit = mock(StageItemCommitService.class);
+        ExportArtifactService artifacts = mock(ExportArtifactService.class);
+        ExportObjectService objects = mock(ExportObjectService.class);
+        TaskRuntime runtime = mock(TaskRuntime.class);
+        ObjectMapper json = new ObjectMapper();
+        ExportTempFiles temp = new ExportTempFiles(config);
+        when(config.getLong(eq("export_max_bytes"), anyLong())).thenReturn(10L * 1024 * 1024);
+        when(config.getLong(eq("export_temp_max_bytes"), anyLong())).thenReturn(64L * 1024 * 1024);
+        TaskEntity task = new TaskEntity();
+        task.setId(70L);
+        task.setProjectId(7L);
+        task.setUserId(1L);
+        TaskPlanUnit failed = new TaskPlanUnit();
+        failed.setBusinessId(7L);
+        failed.setStageType(PipelineStageService.STAGE_EXPORT);
+        failed.setStatus(TaskPlanUnit.STATUS_FAILED);
+        failed.setErrorMessage("source unavailable");
+        when(planning.targetIds(task, PipelineStageService.STAGE_EXPORT, "PROJECT")).thenReturn(List.of(7L));
+        when(planning.plan(task)).thenReturn(List.of(failed));
+        when(artifacts.beginAttempt(any())).thenReturn(new ExportArtifactService.ExportAttempt(90L, 70L, 1, "owner"));
+        ExportStoredObject finalObject = new ExportStoredObject();
+        finalObject.setId(501L);
+        when(objects.registerUpload(eq(70L), eq(null), eq(90L), eq(1L),
+                eq(ExportStoredObject.KIND_FINAL), eq("owner"), eq(1L))).thenReturn(finalObject);
+        when(objects.upload(eq(finalObject), any(java.nio.file.Path.class), anyLong(), anyString()))
+                .thenReturn(finalObject);
+        doNothing().doThrow(new TaskStopSignal()).when(runtime).checkStop();
+
+        ExportTaskHandler handler = new ExportTaskHandler(planning, stages, runner, publication, storage,
+                config, json, metrics, commit, artifacts, objects, temp);
+
+        assertThatThrownBy(() -> handler.run(task, runtime)).isInstanceOf(TaskStopSignal.class);
+        verify(objects).requestDeletion(501L, "最终产物未发布", 0);
         verify(artifacts, never()).publish(any(), anyLong(), any());
     }
 

@@ -113,6 +113,7 @@ public class ExportTaskHandler implements TaskHandler {
                                       ExportArtifactService.ExportAttempt attempt) {
         ExportTempFiles.Handle outerTemp = null;
         com.aimanga.v2.model.ExportStoredObject finalObject = null;
+        boolean published = false;
         try {
             outerTemp = tempFiles.create("batch-" + task.getId() + "-", ".zip");
             Path outer = outerTemp.path();
@@ -195,12 +196,8 @@ public class ExportTaskHandler implements TaskHandler {
             result.put("success", success);
             result.put("failed", units.size() - success);
             result.set("items", objectMapper.valueToTree(items));
-            try {
-                artifactService.publish(attempt, finalObject.getId(), result);
-            } catch (RuntimeException e) {
-                objectService.requestDeletion(finalObject.getId(), "最终发布失败或所有权已失效", 0);
-                throw e;
-            }
+            artifactService.publish(attempt, finalObject.getId(), result);
+            published = true;
         } catch (RuntimeException e) {
             metrics.exportFailure();
             throw e;
@@ -214,6 +211,13 @@ public class ExportTaskHandler implements TaskHandler {
             }
             throw new BusinessException(500, "批量导出发布失败: " + e.getMessage());
         } finally {
+            if (finalObject != null && !published) {
+                try {
+                    objectService.requestDeletion(finalObject.getId(), "最终产物未发布", 0);
+                } catch (RuntimeException cleanupFailure) {
+                    log.warn("[export] 未发布最终产物排队清理失败 objectId={}", finalObject.getId(), cleanupFailure);
+                }
+            }
             if (outerTemp != null) outerTemp.close();
         }
     }
