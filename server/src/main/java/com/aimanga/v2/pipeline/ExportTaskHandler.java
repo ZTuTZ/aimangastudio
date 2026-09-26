@@ -15,6 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.io.InputStream;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.DigestInputStream;
@@ -25,6 +26,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -55,20 +57,38 @@ public class ExportTaskHandler implements TaskHandler {
     public void run(TaskEntity task, TaskRuntime runtime) {
         ExportArtifactService.ExportAttempt attempt = artifactService.beginAttempt(runtime.owner());
         List<Long> projectIds = planningService.targetIds(task, PipelineStageService.STAGE_EXPORT, "PROJECT");
+        AtomicReference<RuntimeException> fatalExportFailure = new AtomicReference<>();
         runtime.begin(projectIds.size());
         stageService.markRunning(task.getProjectId(), PipelineStageService.STAGE_EXPORT);
         stageRunner.run(task.getProjectId(), PipelineStageService.STAGE_EXPORT,
                 new StageRunScope("PROJECT", new java.util.LinkedHashSet<>(projectIds)), runtime,
                 execution -> {
-                    String result = exportProject(task, attempt, execution.planUnitId(), execution.item().getBusinessId());
-                    var commit = commitService.commitFenced(execution, () -> result);
-                    if (!commit.committed()) {
-                        long objectId = objectMapper.readTree(result).path("objectId").asLong(0);
-                        if (objectId > 0) objectService.requestDeletion(objectId, "阶段提交所有权已失效", 0);
-                        throw new StaleCommitRejectedException(execution.item().getId());
+                    RuntimeException earlierFailure = fatalExportFailure.get();
+                    if (earlierFailure != null) throw earlierFailure;
+                    try {
+                        String result = exportProject(task, attempt, execution.planUnitId(), execution.item().getBusinessId());
+                        var commit = commitService.commitFenced(execution, () -> result);
+                        if (!commit.committed()) {
+                            long objectId = objectMapper.readTree(result).path("objectId").asLong(0);
+                            if (objectId > 0) objectService.requestDeletion(objectId, "阶段提交所有权已失效", 0);
+                            throw new StaleCommitRejectedException(execution.item().getId());
+                        }
+                        return commit.resultRef();
+                    } catch (Exception failure) {
+                        if (isExportCapacityFailure(failure)) {
+                            fatalExportFailure.compareAndSet(null, failure instanceof RuntimeException runtimeFailure
+                                    ? runtimeFailure : new BusinessException(503, "导出处理失败: " + failure.getMessage()));
+                        }
+                        throw failure;
                     }
-                    return commit.resultRef();
                 }, stageRunner.scriptEngine());
+
+        RuntimeException fatal = fatalExportFailure.get();
+        if (fatal != null) {
+            stageService.refreshStageTerminalState(task.getProjectId(), PipelineStageService.STAGE_EXPORT);
+            metrics.exportFailure();
+            throw fatal;
+        }
 
         List<TaskPlanUnit> units = planningService.plan(task).stream()
                 .filter(unit -> PipelineStageService.STAGE_EXPORT.equals(unit.getStageType())).toList();
@@ -231,6 +251,7 @@ public class ExportTaskHandler implements TaskHandler {
 
     private static boolean isExportCapacityFailure(Exception failure) {
         if (failure instanceof BusinessException business && business.getStatus() >= 500) return true;
+        if (failure instanceof IOException) return true;
         String message = failure.getMessage();
         return message != null && (message.contains("导出大小超过限制")
                 || message.contains("导出临时磁盘预算不足"));
