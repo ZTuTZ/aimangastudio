@@ -41,6 +41,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
@@ -245,6 +246,49 @@ class ExportLifecycleIT {
         assertThat(objectMapper.claimCleanup(object.getId(), UUID.randomUUID().toString(), 300)).isZero();
         assertThat(objectMapper.selectById(object.getId()).getState())
                 .isEqualTo(ExportStoredObject.STATE_UPLOADING);
+    }
+
+    @Test
+    void lateUploadAfterCleanupRemainsQueuedWhenImmediateRemoteDeleteFails() throws Exception {
+        Map<String, byte[]> stored = new ConcurrentHashMap<>();
+        AtomicInteger deleteCalls = new AtomicInteger();
+        doAnswer(invocation -> {
+            stored.put(invocation.getArgument(0), Files.readAllBytes(invocation.getArgument(1)));
+            return null;
+        }).when(storage).saveExportFile(anyString(), any(java.nio.file.Path.class));
+        doAnswer(invocation -> {
+            if (deleteCalls.incrementAndGet() == 2) throw new IllegalStateException("OSS temporarily unavailable");
+            stored.remove(invocation.getArgument(0));
+            return null;
+        }).when(storage).deleteExportFile(anyString());
+        ExportStoredObject object = objectService.registerUpload(70L, null, null, 1,
+                ExportStoredObject.KIND_FINAL, "owner-a", 1L);
+        jdbc.update("UPDATE task SET status=3 WHERE id=70");
+        jdbc.update("UPDATE export_stored_object SET upload_deadline=DATE_SUB(NOW(),INTERVAL 1 SECOND) WHERE id=?",
+                object.getId());
+        objectService.cleanup();
+        assertThat(objectMapper.selectById(object.getId()).getState())
+                .isEqualTo(ExportStoredObject.STATE_DELETED);
+
+        var file = Files.createTempFile("late-export-", ".zip");
+        try {
+            Files.writeString(file, "late bytes");
+            assertThatThrownBy(() -> objectService.upload(object, file, Files.size(file), "late-sha"))
+                    .isInstanceOf(com.aimanga.v2.common.BusinessException.class)
+                    .hasMessageContaining("上传已失效");
+            assertThat(objectMapper.selectById(object.getId()).getState())
+                    .isEqualTo(ExportStoredObject.STATE_DELETE_PENDING);
+            assertThat(stored).containsKey(object.getStorageKey());
+
+            jdbc.update("UPDATE export_stored_object SET delete_after=DATE_SUB(NOW(),INTERVAL 1 SECOND) WHERE id=?",
+                    object.getId());
+            objectService.cleanup();
+            assertThat(stored).doesNotContainKey(object.getStorageKey());
+            assertThat(objectMapper.selectById(object.getId()).getState())
+                    .isEqualTo(ExportStoredObject.STATE_DELETED);
+        } finally {
+            Files.deleteIfExists(file);
+        }
     }
 
     @Test
