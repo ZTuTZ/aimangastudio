@@ -292,6 +292,35 @@ class ExportLifecycleIT {
     }
 
     @Test
+    void uploadedFinalObjectOrphanedByCrashIsCleanedAfterUploadDeadline() throws Exception {
+        var attempt = artifactService.beginAttempt(new TaskExecutionOwner(70L, "owner-a"));
+        ExportStoredObject object = upload(attempt, "uploaded-before-crash");
+        jdbc.update("UPDATE task SET status=3, claim_token=NULL, lease_until=NULL WHERE id=70");
+        jdbc.update("UPDATE export_stored_object SET upload_deadline=DATE_SUB(NOW(),INTERVAL 1 SECOND) WHERE id=?",
+                object.getId());
+
+        objectService.cleanup();
+
+        assertThat(objectMapper.selectById(object.getId()).getState())
+                .isEqualTo(ExportStoredObject.STATE_DELETED);
+    }
+
+    @Test
+    void publishedFinalObjectSurvivesExpiredUploadDeadline() throws Exception {
+        var attempt = artifactService.beginAttempt(new TaskExecutionOwner(70L, "owner-a"));
+        ExportStoredObject object = upload(attempt, "published-before-deadline");
+        artifactService.publish(attempt, object.getId(), json.createObjectNode().put("success", 1));
+        jdbc.update("UPDATE task SET status=2, claim_token=NULL, lease_until=NULL WHERE id=70");
+        jdbc.update("UPDATE export_stored_object SET upload_deadline=DATE_SUB(NOW(),INTERVAL 1 SECOND) WHERE id=?",
+                object.getId());
+
+        objectService.cleanup();
+
+        assertThat(objectMapper.selectById(object.getId()).getState())
+                .isEqualTo(ExportStoredObject.STATE_RETAINED);
+    }
+
+    @Test
     void cleanupWaitsForActiveDownloadAndDeletesAfterReadLeaseEnds() throws Exception {
         var attempt = artifactService.beginAttempt(new TaskExecutionOwner(70L, "owner-a"));
         ExportStoredObject object = upload(attempt, "download");

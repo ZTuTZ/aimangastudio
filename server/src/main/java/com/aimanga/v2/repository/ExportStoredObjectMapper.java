@@ -9,6 +9,11 @@ import org.apache.ibatis.annotations.Update;
 import java.util.List;
 
 public interface ExportStoredObjectMapper extends BaseMapper<ExportStoredObject> {
+    String ORPHAN_FINAL_PREDICATE = "(o.kind='FINAL' AND o.state='RETAINED' AND o.upload_deadline<NOW() " +
+            "AND NOT EXISTS (SELECT 1 FROM task t WHERE t.id=o.task_id AND t.status IN (0,1,6,7)) " +
+            "AND NOT EXISTS (SELECT 1 FROM export_artifact a WHERE a.id=o.artifact_id " +
+            "AND (a.current_object_id=o.id OR (a.current_object_id IS NULL AND a.storage_url=o.storage_url))))";
+
     @Select("SELECT * FROM export_stored_object WHERE id = #{id} FOR UPDATE")
     ExportStoredObject lockById(@Param("id") Long id);
 
@@ -34,7 +39,8 @@ public interface ExportStoredObjectMapper extends BaseMapper<ExportStoredObject>
     @Select("SELECT * FROM export_stored_object o WHERE ((o.state='DELETE_PENDING' AND o.delete_after<=NOW()) " +
             "OR (o.state='DELETING' AND o.cleanup_lease_until<NOW()) " +
             "OR (o.state='UPLOADING' AND o.upload_deadline<NOW() " +
-            "AND NOT EXISTS (SELECT 1 FROM task t WHERE t.id=o.task_id AND t.status IN (0,1,6,7)))) " +
+            "AND NOT EXISTS (SELECT 1 FROM task t WHERE t.id=o.task_id AND t.status IN (0,1,6,7))) " +
+            "OR " + ORPHAN_FINAL_PREDICATE + ") " +
             "AND NOT EXISTS (SELECT 1 FROM export_object_read_lease l WHERE l.object_id=o.id AND l.lease_until>NOW()) " +
             "ORDER BY o.id LIMIT 100")
     List<ExportStoredObject> selectCleanupCandidates();
@@ -44,7 +50,7 @@ public interface ExportStoredObjectMapper extends BaseMapper<ExportStoredObject>
             "WHERE o.id=#{id} AND (o.state='DELETE_PENDING' OR " +
             "(o.state='UPLOADING' AND o.upload_deadline<NOW() " +
             "AND NOT EXISTS (SELECT 1 FROM task t WHERE t.id=o.task_id AND t.status IN (0,1,6,7))) OR " +
-            "(o.state='DELETING' AND o.cleanup_lease_until<NOW())) " +
+            "(o.state='DELETING' AND o.cleanup_lease_until<NOW()) OR " + ORPHAN_FINAL_PREDICATE + ") " +
             "AND NOT EXISTS (SELECT 1 FROM export_object_read_lease l WHERE l.object_id=o.id AND l.lease_until>NOW())")
     int claimCleanup(@Param("id") Long id, @Param("token") String token,
                      @Param("leaseSeconds") int leaseSeconds);
