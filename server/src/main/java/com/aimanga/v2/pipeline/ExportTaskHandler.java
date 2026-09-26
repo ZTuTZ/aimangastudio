@@ -137,6 +137,7 @@ public class ExportTaskHandler implements TaskHandler {
                                 try {
                                     loadVerifiedCheckpoint(result, checkpointTemp);
                                 } catch (Exception firstFailure) {
+                                    if (isExportCapacityFailure(firstFailure)) throw firstFailure;
                                     long oldObjectId = result.path("objectId").asLong(0);
                                     String rebuilt = exportProject(task, attempt, unit.getId(), unit.getBusinessId());
                                     planningService.replaceSuccessfulResult(unit.getId(), rebuilt);
@@ -147,6 +148,7 @@ public class ExportTaskHandler implements TaskHandler {
                                     }
                                 }
                             } catch (BusinessException e) {
+                                if (isExportCapacityFailure(e)) throw e;
                                 checkpointReady = false;
                                 item.put("exported", false);
                                 item.put("error", e.getMessage());
@@ -225,6 +227,13 @@ public class ExportTaskHandler implements TaskHandler {
     private void enforceQuota(long bytes) {
         long max = exportMaxBytes();
         if (bytes > max) throw new BusinessException(400, "导出大小超过限制: " + max + " bytes");
+    }
+
+    private static boolean isExportCapacityFailure(Exception failure) {
+        if (failure instanceof BusinessException business && business.getStatus() >= 500) return true;
+        String message = failure.getMessage();
+        return message != null && (message.contains("导出大小超过限制")
+                || message.contains("导出临时磁盘预算不足"));
     }
 
     private long exportMaxBytes() {

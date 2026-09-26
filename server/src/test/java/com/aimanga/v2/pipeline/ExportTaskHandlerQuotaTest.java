@@ -1,6 +1,7 @@
 package com.aimanga.v2.pipeline;
 
 import com.aimanga.v2.common.BusinessException;
+import com.aimanga.v2.dto.export.ComicManifest;
 import com.aimanga.v2.model.ExportStoredObject;
 import com.aimanga.v2.model.TaskEntity;
 import com.aimanga.v2.model.TaskPlanUnit;
@@ -124,6 +125,58 @@ class ExportTaskHandlerQuotaTest {
 
         assertThatThrownBy(() -> handler.run(task, runtime)).isInstanceOf(TaskStopSignal.class);
         verify(objects).requestDeletion(501L, "最终产物未发布", 0);
+        verify(artifacts, never()).publish(any(), anyLong(), any());
+    }
+
+    @Test
+    void diskBudgetFailureWhileRebuildingCheckpointAbortsWithoutPublishingPartialArchive() throws Exception {
+        TaskPlanningService planning = mock(TaskPlanningService.class);
+        PipelineStageService stages = mock(PipelineStageService.class);
+        ConcurrentStageRunner runner = mock(ConcurrentStageRunner.class);
+        PublicationService publication = mock(PublicationService.class);
+        StorageService storage = mock(StorageService.class);
+        ConfigService config = mock(ConfigService.class);
+        OperationalMetrics metrics = mock(OperationalMetrics.class);
+        StageItemCommitService commit = mock(StageItemCommitService.class);
+        ExportArtifactService artifacts = mock(ExportArtifactService.class);
+        ExportObjectService objects = mock(ExportObjectService.class);
+        TaskRuntime runtime = mock(TaskRuntime.class);
+        ObjectMapper json = new ObjectMapper();
+        ExportTempFiles temp = new ExportTempFiles(config);
+        when(config.getLong(eq("export_max_bytes"), anyLong())).thenReturn(10L * 1024 * 1024);
+        when(config.getLong(eq("export_temp_max_bytes"), anyLong())).thenReturn(64L * 1024 * 1024);
+
+        TaskPlanUnit unit = checkpoint(1L, 7L, 1, "bad-checksum", json);
+        ComicManifest snapshot = new ComicManifest(ComicManifest.SCHEMA_VERSION, "uid-7", "comic",
+                "", "", "", "", List.of(), 0, "1:1", "color", true, List.of());
+        var snapshotNode = json.valueToTree(snapshot);
+        var input = json.createObjectNode();
+        input.set("publicationSnapshot", snapshotNode);
+        input.put("snapshotSha256", JsonDigest.sha256(snapshotNode));
+        unit.setInputSnapshot(input.toString());
+        TaskEntity task = new TaskEntity();
+        task.setId(70L);
+        task.setProjectId(7L);
+        task.setUserId(1L);
+        when(planning.targetIds(task, PipelineStageService.STAGE_EXPORT, "PROJECT")).thenReturn(List.of(7L));
+        when(planning.plan(task)).thenReturn(List.of(unit));
+        when(planning.requireUnit(1L)).thenReturn(unit);
+        when(artifacts.beginAttempt(any())).thenReturn(new ExportArtifactService.ExportAttempt(90L, 70L, 1, "owner"));
+        doThrow(new BusinessException(409, "检查点损坏"))
+                .when(objects).writeTo(anyLong(), any(OutputStream.class));
+        doThrow(new BusinessException(503, "导出临时磁盘预算不足"))
+                .when(publication).writeZip(any(ComicManifest.class), any(OutputStream.class));
+        ExportStoredObject finalObject = new ExportStoredObject();
+        finalObject.setId(501L);
+        when(objects.registerUpload(eq(70L), eq(null), eq(90L), eq(1L),
+                eq(ExportStoredObject.KIND_FINAL), eq("owner"), eq(1L))).thenReturn(finalObject);
+
+        ExportTaskHandler handler = new ExportTaskHandler(planning, stages, runner, publication, storage,
+                config, json, metrics, commit, artifacts, objects, temp);
+
+        assertThatThrownBy(() -> handler.run(task, runtime))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("导出临时磁盘预算不足");
         verify(artifacts, never()).publish(any(), anyLong(), any());
     }
 
