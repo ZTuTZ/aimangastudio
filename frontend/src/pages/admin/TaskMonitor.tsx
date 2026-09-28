@@ -67,12 +67,13 @@ export function TaskMonitor() {
   });
 
   return (
-    <div className="flex flex-col gap-4">
-      <Row gutter={12}>
-        <Col span={5}><StatCard title="进行中任务" value={overview?.runningTasks} /></Col>
-        <Col span={5}><StatCard title="排队任务" value={overview?.pendingTasks} /></Col>
-        <Col span={5}><StatCard title="队列长度" value={overview?.queueLength} /></Col>
-        <Col span={9}>
+    <div className="studio-page">
+      <div className="studio-page-header"><div><span className="studio-page-kicker">ADMINISTRATION</span><Typography.Title level={4} style={{ margin: 0 }}>任务监控</Typography.Title><span className="studio-page-description">查看队列、通道占用和所有项目的生成进度。</span></div></div>
+      <Row gutter={[12, 12]}>
+        <Col xs={12} md={6} lg={5}><StatCard title="进行中任务" value={overview?.runningTasks} /></Col>
+        <Col xs={12} md={6} lg={5}><StatCard title="排队任务" value={overview?.pendingTasks} /></Col>
+        <Col xs={12} md={6} lg={5}><StatCard title="队列长度" value={overview?.queueLength} /></Col>
+        <Col xs={24} md={12} lg={9}>
           <Card size="small" title="AI 通道占用">
             <Space wrap size="large">
               {(overview?.aiChannels ?? []).map((c) => (
@@ -98,7 +99,7 @@ export function TaskMonitor() {
         ) : (
           <div className="flex flex-col gap-3">
             {activeProjects.map((p) => (
-              <div key={p.projectId} className="p-3 rounded-lg border border-gray-200 bg-white">
+              <div key={p.projectId} className="p-4 rounded-xl border border-[#eceaf3] bg-[#fcfbff]">
                 <div className="flex items-center gap-2 mb-2">
                   <Typography.Text strong>{p.projectTitle}</Typography.Text>
                   <Tag bordered={false}>{TASK_TYPE_LABELS[p.taskType] ?? p.taskType} #{p.taskId}</Tag>
@@ -113,7 +114,7 @@ export function TaskMonitor() {
                   {p.stages.map((s) => {
                     const meta = STAGE_STATUS[s.status ?? 0] ?? STAGE_STATUS[0];
                     return (
-                      <div key={s.stageType} className="px-3 py-2 rounded-lg border border-gray-100 bg-gray-50 text-center min-w-32">
+                      <div key={s.stageType} className="px-3 py-2 rounded-lg border border-[#eeedf4] bg-white text-center min-w-32">
                         <Typography.Text type="secondary" className="text-xs">{STAGE_NAMES[s.stageType] ?? s.stageType}</Typography.Text>
                         <div className="text-lg font-semibold">
                           {s.success ?? 0} <span className="text-xs text-gray-400">/ {s.total ?? 0}</span>

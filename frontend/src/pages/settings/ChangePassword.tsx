@@ -31,7 +31,9 @@ export function ChangePassword() {
   };
 
   return (
-    <Card className="max-w-lg" title="修改密码">
+    <div className="studio-page">
+      <div className="studio-page-header"><div><span className="studio-page-kicker">ACCOUNT SETTINGS</span><Typography.Title level={4} style={{ margin: 0 }}>个人设置</Typography.Title><span className="studio-page-description">管理你的登录密码。</span></div></div>
+    <Card className="max-w-xl" title="修改密码">
       <Typography.Paragraph type="secondary" className="mb-6">
         修改成功后将退出登录,需要使用新密码重新登录。
       </Typography.Paragraph>
@@ -70,5 +72,6 @@ export function ChangePassword() {
         </Button>
       </Form>
     </Card>
+    </div>
   );
 }

@@ -8,8 +8,9 @@ interface ComingSoonProps {
 /** Phase 1 占位页:展示该页面的规划内容,Tx.y 任务实现后替换 */
 export function ComingSoon({ title, items }: ComingSoonProps) {
   return (
-    <div className="bg-white rounded-xl border border-[#eef0f4] p-10">
-      <Typography.Title level={4}>{title}</Typography.Title>
+    <div className="studio-page">
+      <div className="studio-page-header"><div><span className="studio-page-kicker">ADMINISTRATION</span><Typography.Title level={4}>{title}</Typography.Title></div></div>
+      <div className="studio-panel">
       <Typography.Paragraph type="secondary">该页面将在后续开发任务中实现。</Typography.Paragraph>
       {items && items.length > 0 && (
         <div className="max-w-xl">
@@ -25,6 +26,7 @@ export function ComingSoon({ title, items }: ComingSoonProps) {
           />
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -70,9 +70,9 @@ export function PublishExport() {
   });
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="studio-page">
       <CardTitle />
-      <div className="flex items-center gap-3">
+      <div className="studio-panel flex flex-wrap items-center gap-3">
         <Typography.Text type="secondary" className="text-sm">
           已选 {selectedIds.length} 部 · 导出包 = manifest.json(comic-content-1.0) + 全部成品页图片
         </Typography.Text>
@@ -137,7 +137,7 @@ export function PublishExport() {
         />
       )}
 
-      <Table<AdminProjectRow>
+      <section className="studio-panel"><Table<AdminProjectRow>
         rowKey="id"
         size="small"
         loading={isLoading}
@@ -153,7 +153,7 @@ export function PublishExport() {
           { title: '状态', dataIndex: 'status', width: 100, render: (s) => <Tag color={STATUS_META[s]?.color} bordered={false}>{STATUS_META[s]?.label ?? s}</Tag> },
           { title: 'content_uid', dataIndex: 'contentUid', ellipsis: true, render: (v) => <Typography.Text copyable className="text-xs">{v}</Typography.Text> },
         ]}
-      />
+      /></section>
     </div>
   );
 }
@@ -174,11 +174,10 @@ export function parseExportResult(value: string | null | undefined): ExportResul
 
 function CardTitle() {
   return (
-    <Typography.Title level={4} style={{ margin: 0 }}>
-      发布导出
-      <Typography.Text type="secondary" className="text-sm ml-3">
-        校验会检查话序/页号连续性与成品图就绪情况;设定表/参考图不是发布必需项
-      </Typography.Text>
-    </Typography.Title>
+    <div className="studio-page-header"><div>
+      <span className="studio-page-kicker">ADMINISTRATION</span>
+      <Typography.Title level={4} style={{ margin: 0 }}>发布导出</Typography.Title>
+      <span className="studio-page-description">校验会检查话序、页号连续性与成品图就绪情况。</span>
+    </div></div>
   );
 }

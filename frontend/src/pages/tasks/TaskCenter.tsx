@@ -218,9 +218,10 @@ export function TaskCenter() {
   ];
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
+    <div className="studio-page">
+      <div className="studio-page-header">
         <div>
+          <span className="studio-page-kicker">TASK CENTER</span>
           <Typography.Title level={4} style={{ margin: 0 }}>
             任务中心
           </Typography.Title>
@@ -232,7 +233,7 @@ export function TaskCenter() {
             )}
           </Typography.Text>
         </div>
-        <Space>
+        <Space wrap>
           {isAdmin && (
             <Button icon={<CaretRightOutlined />} onClick={() => setTestModalOpen(true)}>
               创建测试任务
@@ -247,8 +248,9 @@ export function TaskCenter() {
         </Space>
       </div>
 
-      <div className="bg-white rounded-xl border border-[#eef0f4] p-4">
-        <div className="flex flex-wrap items-center gap-2 mb-4">
+      <section className="studio-panel">
+        <div className="studio-section-heading"><h2>任务列表</h2><span className="studio-section-caption">查看进度与处理结果</span></div>
+        <div className="studio-toolbar">
           <Input
             allowClear
             placeholder="按作品名过滤"
@@ -296,7 +298,7 @@ export function TaskCenter() {
             },
           }}
         />
-      </div>
+      </section>
       <UploadStoriesTestModal
         open={testModalOpen}
         onClose={() => setTestModalOpen(false)}

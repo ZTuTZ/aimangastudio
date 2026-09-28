@@ -172,7 +172,7 @@ export function SystemConfig() {
   const renderGroup = (group: GroupDef) => (
     <div className="flex flex-col gap-3 max-w-2xl">
       {group.fields.map((field) => (
-        <div key={field.key} className="grid grid-cols-[180px_1fr] items-center gap-3">
+        <div key={field.key} className="studio-config-row grid grid-cols-[180px_1fr] items-center gap-3">
           <Typography.Text type="secondary" className="text-sm">
             {field.label}
           </Typography.Text>
@@ -200,7 +200,7 @@ export function SystemConfig() {
         </div>
       ))}
       {(group.key === 'ai_text' || group.key === 'ai_image') && (
-        <div className="grid grid-cols-[180px_1fr] items-center gap-3">
+        <div className="studio-config-row grid grid-cols-[180px_1fr] items-center gap-3">
           <span />
           <Button
             loading={verifying === (group.key === 'ai_text' ? 'text' : 'image')}
@@ -214,10 +214,12 @@ export function SystemConfig() {
   );
 
   return (
+    <div className="studio-page">
+      <div className="studio-page-header"><div><span className="studio-page-kicker">ADMINISTRATION</span><Typography.Title level={4} style={{ margin: 0 }}>系统配置</Typography.Title><span className="studio-page-description">集中管理 AI 通道、存储和生成参数。</span></div></div>
     <Card
-      title="系统配置"
+      title="配置项目"
       extra={
-        <Space>
+        <Space wrap>
           <Typography.Text type="secondary" className="text-xs">
             密钥保存后脱敏显示;修改即时生效,无需重启
           </Typography.Text>
@@ -240,5 +242,6 @@ export function SystemConfig() {
         }))}
       />
     </Card>
+    </div>
   );
 }

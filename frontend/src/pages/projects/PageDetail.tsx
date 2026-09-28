@@ -122,8 +122,8 @@ export function PageDetail() {
   })();
 
   return (
-    <div className="flex flex-col gap-4">
-      <Space>
+    <div className="studio-page studio-page-editor">
+      <Space className="studio-page-header" wrap>
         <Button
           icon={<ArrowLeftOutlined />}
           onClick={() => {
@@ -140,7 +140,7 @@ export function PageDetail() {
         >
           返回作品
         </Button>
-        <Typography.Title level={4} style={{ margin: 0 }}>第 {page.pageNo} 页</Typography.Title>
+        <Typography.Title level={4} style={{ margin: 0 }}>第 {page.pageNo} 页 · 分镜工作台</Typography.Title>
         {layoutStale && <Tag color="orange" bordered={false}>布局已过期(脚本 v{scriptVersion})</Tag>}
         {imageStale && <Tag color="red" bordered={false}>成品已过期(脚本 v{scriptVersion})</Tag>}
       </Space>
@@ -160,7 +160,7 @@ export function PageDetail() {
               </div>
               <div>
                 <Typography.Text type="secondary" className="text-xs">对白(只读)</Typography.Text>
-                <div className="rounded border border-gray-200 p-2 text-xs min-h-16 bg-gray-50">
+                <div className="rounded-lg border border-[#e9e7f0] p-3 text-xs min-h-16 bg-[#faf9fc]">
                   {dialogueLines.length === 0
                     ? <Typography.Text type="secondary">(无对白)</Typography.Text>
                     : dialogueLines.map((l, i) => <div key={i}>{l}</div>)}
@@ -188,7 +188,7 @@ export function PageDetail() {
               重生成布局
             </Button>
           }>
-            <div className="aspect-[3/4] rounded bg-gray-50 flex items-center justify-center overflow-hidden">
+            <div className="studio-image-stage aspect-[3/4] flex items-center justify-center overflow-hidden">
               {page.layoutImageUrl
                 ? <Image src={page.layoutImageUrl} alt="布局图" className="w-full object-contain" />
                 : <Typography.Text type="secondary" className="text-xs">尚未生成布局图</Typography.Text>}
@@ -218,7 +218,7 @@ export function PageDetail() {
               </Button>
             </Space>
           }>
-            <div className="aspect-[3/4] rounded bg-gray-50 flex items-center justify-center overflow-hidden relative">
+            <div className="studio-image-stage aspect-[3/4] flex items-center justify-center overflow-hidden relative">
               {page.generatedImageUrl
                 ? <Image src={page.generatedImageUrl} alt="成品图" className="w-full object-contain" />
                 : <Typography.Text type="secondary" className="text-xs">尚未生成成品图</Typography.Text>}
@@ -245,7 +245,7 @@ export function PageDetail() {
                 <Tag bordered={false} color={r.status === 'SUCCESS' ? 'default' : 'error'}>{r.kind}</Tag>
                 <Typography.Text type="secondary" className="shrink-0">{r.createTime}</Typography.Text>
                 {r.resultUrl && (
-                  <a href={r.resultUrl} target="_blank" rel="noreferrer" className="text-indigo-500 hover:underline">
+                  <a href={r.resultUrl} target="_blank" rel="noreferrer" className="text-[#6056c8] hover:underline">
                     查看该次结果图
                   </a>
                 )}

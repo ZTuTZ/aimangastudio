@@ -27,12 +27,19 @@ export function Login() {
   };
 
   return (
-    <div className="h-screen flex items-center justify-center" style={{ background: 'linear-gradient(160deg,#eef2ff 0%,#f5f6fa 45%,#fdf4ff 100%)' }}>
-      <Card className="w-96 shadow-lg" styles={{ body: { padding: 36 } }}>
+    <div className="studio-login">
+      <section className="studio-login-story">
+        <span className="studio-page-kicker">AIMANGA STUDIO</span>
+        <h1>让每一个故事，<br />逐页成形。</h1>
+        <p>从长篇剧本到角色素材、分镜与成品漫画，<br />在一个工作台里持续创作。</p>
+        <div className="studio-login-art" aria-hidden="true"><span>故</span><span>事</span><span>漫</span></div>
+      </section>
+      <div className="studio-login-form-area">
+        <Card className="studio-login-card">
         <div className="text-center mb-7">
           <div
             className="w-12 h-12 rounded-xl flex items-center justify-center text-white text-xl font-bold mx-auto mb-3"
-            style={{ background: 'linear-gradient(135deg,#6366f1,#a855f7)' }}
+            style={{ background: 'linear-gradient(135deg,#645bd0,#b59aeb)' }}
           >
             A
           </div>
@@ -42,10 +49,10 @@ export function Login() {
           <Typography.Text type="secondary">AI 漫画生产平台</Typography.Text>
         </div>
         <Form layout="vertical" onFinish={onFinish} size="large">
-          <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
+        <Form.Item name="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
             <Input prefix={<UserOutlined />} placeholder="用户名" autoComplete="username" />
           </Form.Item>
-          <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
+        <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
             <Input.Password prefix={<LockOutlined />} placeholder="密码" autoComplete="current-password" />
           </Form.Item>
           <Button type="primary" htmlType="submit" block loading={loading}>
@@ -55,7 +62,8 @@ export function Login() {
             账号由管理员创建,如需开通请联系系统管理员
           </Typography.Text>
         </Form>
-      </Card>
+        </Card>
+      </div>
     </div>
   );
 }

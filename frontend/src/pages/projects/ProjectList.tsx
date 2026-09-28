@@ -83,11 +83,12 @@ export function ProjectList() {
       dataIndex: 'title',
       width: 280,
       render: (_, row) => (
-        <Tooltip title={row.title}>
-          <Typography.Text strong ellipsis className="block max-w-[240px]">
-            {row.title}
-          </Typography.Text>
-        </Tooltip>
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="studio-table-cover">{row.coverUrl ? <img src={row.coverUrl} alt="" /> : row.title.slice(0, 1)}</div>
+          <Tooltip title={row.title}>
+            <Typography.Text strong ellipsis className="block max-w-[185px]">{row.title}</Typography.Text>
+          </Tooltip>
+        </div>
       ),
     },
     {
@@ -145,25 +146,45 @@ export function ProjectList() {
   ];
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
+    <div className="studio-page">
+      <section className="studio-hero">
         <div>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            作品库
-          </Typography.Title>
-          <Typography.Text type="secondary">上传故事 → 准备流水线 → 一键生成成品页</Typography.Text>
+          <span className="studio-page-kicker">YOUR CREATIVE SPACE</span>
+          <h1>让故事，逐页成形。</h1>
+          <p>从剧本到漫画，接着完成你正在创作的作品。</p>
         </div>
-        <button
-          onClick={() => setUploadOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-semibold shadow-sm hover:opacity-90 transition"
-          style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}
-        >
-          <UploadOutlined /> 上传故事
-        </button>
-      </div>
+        <Button type="primary" size="large" icon={<UploadOutlined />} onClick={() => setUploadOpen(true)}>上传故事</Button>
+      </section>
 
-      <div className="bg-white rounded-xl border border-[#eef0f4] p-4">
-        <div className="flex flex-wrap items-center gap-2 mb-4">
+      {page === 1 && !applied.keyword && applied.status === undefined && !!data?.records?.length && (
+        <section>
+          <div className="studio-section-heading"><h2>快速进入</h2><span className="studio-section-caption">继续你正在进行的故事</span></div>
+          <div className="studio-project-featured">
+            {data.records.slice(0, 3).map((project, index) => {
+              const meta = PROJECT_STATUS[project.status] ?? { label: '未知', color: 'default' };
+              return (
+                <div key={project.id} className="studio-project-tile" role="button" tabIndex={0}
+                  onClick={() => navigate(`/projects/${project.id}`)}
+                  onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); navigate(`/projects/${project.id}`); } }}>
+                  <div className={`studio-project-cover ${index === 1 ? 'is-second' : index === 2 ? 'is-third' : ''}`}>
+                    {project.coverUrl ? <img src={project.coverUrl} alt="" /> : project.title.slice(0, 1)}
+                  </div>
+                  <div className="studio-project-info">
+                    <strong title={project.title}>{project.title}</strong>
+                    <Tag color={meta.color} bordered={false}>{meta.label}</Tag>
+                    <small>{project.chapterCount} 话 · {project.pageCount} 页</small>
+                    <span className="studio-project-more">继续创作 ↗</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      <section className="studio-panel">
+        <div className="studio-section-heading"><h2>全部作品</h2><span className="studio-section-caption">搜索、筛选和批量管理</span></div>
+        <div className="studio-toolbar">
           <Input
             allowClear
             placeholder="按作品名称搜索"
@@ -233,7 +254,7 @@ export function ProjectList() {
             },
           }}
         />
-      </div>
+      </section>
 
       <UploadStoriesModal open={uploadOpen} onClose={() => setUploadOpen(false)} />
     </div>

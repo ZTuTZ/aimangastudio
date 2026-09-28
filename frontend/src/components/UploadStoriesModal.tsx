@@ -74,6 +74,7 @@ export function UploadStoriesModal({ open, onClose }: UploadStoriesModalProps) {
 
   return (
     <Modal
+      className="studio-dialog"
       open={open}
       title="上传故事"
       width={560}
@@ -122,13 +123,13 @@ export function UploadStoriesModal({ open, onClose }: UploadStoriesModalProps) {
             <FileTextOutlined /> 标题与故事原文
           </Typography.Text>
           <input
-            className="border border-gray-200 rounded-md px-3 py-2 text-sm"
+            className="w-full border border-[#e5e3ee] rounded-lg px-3 py-2 text-sm focus-visible:outline-[#6056c8]"
             placeholder="作品标题"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
           />
           <textarea
-            className="border border-gray-200 rounded-md px-3 py-2 text-sm min-h-40"
+            className="w-full border border-[#e5e3ee] rounded-lg px-3 py-2 text-sm min-h-40 focus-visible:outline-[#6056c8]"
             placeholder="粘贴故事原文…"
             value={sourceText}
             onChange={(e) => setSourceText(e.target.value)}
@@ -136,7 +137,7 @@ export function UploadStoriesModal({ open, onClose }: UploadStoriesModalProps) {
         </div>
       )}
 
-      <div className="mt-4 grid grid-cols-3 gap-3">
+      <div className="studio-form-grid mt-4 grid grid-cols-3 gap-3">
         <div>
           <Typography.Text type="secondary" className="block mb-1 text-xs">画幅</Typography.Text>
           <Select<AspectRatio>
@@ -180,7 +181,7 @@ export function UploadStoriesModal({ open, onClose }: UploadStoriesModalProps) {
       <Typography.Text type="secondary" className="block mt-4 mb-2 text-xs">
         素材比例(场景/道具/服装参考图,生成前可随时在作品详情修改)
       </Typography.Text>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="studio-form-grid grid grid-cols-3 gap-3">
         <div>
           <Typography.Text type="secondary" className="block mb-1 text-xs">场景</Typography.Text>
           <Select

@@ -117,7 +117,7 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets, 
   const required = preflight?.stats?.find((s) => s.assetType === 1);
 
   return (
-    <div className="flex flex-col gap-4 max-w-4xl">
+    <div className="studio-generation-workbench flex flex-col gap-4">
       {/* T6.4.1 生成控制区 */}
       <Card size="small" title="生成范围与参数">
         <div className="flex flex-col gap-3">
@@ -196,7 +196,7 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets, 
             />
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {(preflight.stats.length === 0 ? [] : preflight.stats).map((s) => (
-                <div key={s.assetType} className="p-2 rounded-lg border border-gray-200 bg-white text-center">
+                <div key={s.assetType} className="p-3 rounded-xl border border-[#e9e7f0] bg-[#fcfbff] text-center">
                   <Typography.Text type="secondary" className="text-xs">{ASSET_TYPE_NAMES[s.assetType] ?? '素材'}</Typography.Text>
                   <div className="text-lg font-semibold">{s.ready} <span className="text-xs text-gray-400">/ {s.total}</span></div>
                 </div>
@@ -263,7 +263,7 @@ export function GenerationWorkbench({ projectId, project, chapters, onGoAssets, 
             {[layoutStage, imageStage].filter(Boolean).map((stage) => {
               const meta = STAGE_STATUS[stage!.status ?? 0] ?? STAGE_STATUS[0];
               return (
-                <div key={stage!.id} className="p-3 rounded-lg border border-gray-200 bg-white">
+                <div key={stage!.id} className="p-4 rounded-xl border border-[#e9e7f0] bg-[#fcfbff]">
                   <div className="flex items-center justify-between">
                     <Typography.Text strong>{STAGE_META[stage!.stageType]?.label ?? stage!.stageType}</Typography.Text>
                     <Tag color={meta.color} bordered={false}>{meta.label}</Tag>
@@ -382,13 +382,13 @@ function ChapterPages({ projectId, chapterId }: { projectId: number; chapterId: 
         return (
           <div
             key={p.id}
-            className="p-2 rounded-lg border border-gray-200 bg-white cursor-pointer hover:border-indigo-400 hover:shadow-sm transition"
+            className="studio-gallery-tile p-2 border bg-white cursor-pointer transition"
             onClick={() => navigate(`/projects/${projectId}/pages/${p.id}`, {
               state: { from: 'generate', chapterId }
             })}
             title="点击进入页详情"
           >
-            <div className="aspect-[3/4] rounded bg-gray-50 flex items-center justify-center overflow-hidden relative">
+            <div className="aspect-[3/4] rounded-lg bg-[#f3f2f7] flex items-center justify-center overflow-hidden relative">
               {previewUrl ? (
                 <>
                   <Image src={previewUrl} alt={`第${p.pageNo}页`} className="w-full h-full object-cover" wrapperClassName="w-full h-full" />

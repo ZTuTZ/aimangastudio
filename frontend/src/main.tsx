@@ -8,6 +8,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import { themeConfig } from './theme/token';
 import './index.css';
+import './studio.css';
 
 dayjs.locale('zh-cn');
 

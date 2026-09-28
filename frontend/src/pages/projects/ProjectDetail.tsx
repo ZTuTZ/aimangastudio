@@ -51,34 +51,30 @@ export function ProjectDetail() {
   })();
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="studio-page studio-project-detail">
       {/* 基本信息:封面 + 标题 + 状态/元数据 主视觉布局 */}
-      <Card styles={{ body: { padding: 20 } }}>
-        <div className="flex gap-5">
-          <div className="w-24 h-32 rounded-xl overflow-hidden flex-shrink-0 shadow-sm">
+      <Card className="studio-project-overview">
+        <div className="studio-project-overview-row flex gap-5">
+          <div className="studio-project-cover studio-project-detail-cover">
             {project.coverUrl ? (
-              <img src={project.coverUrl} alt={project.title} className="w-full h-full object-cover" />
+              <img src={project.coverUrl} alt={project.title} />
             ) : (
-              <div
-                className="w-full h-full flex items-center justify-center text-white text-3xl font-bold"
-                style={{ background: 'linear-gradient(135deg,#6366f1,#a855f7)' }}
-              >
-                {project.title.slice(0, 1)}
-              </div>
+              project.title.slice(0, 1)
             )}
           </div>
           <div className="flex-1 min-w-0 flex flex-col gap-1.5">
-            <div className="flex items-start justify-between gap-3">
+            <span className="studio-page-kicker">PROJECT WORKSPACE</span>
+            <div className="studio-project-title-row flex items-start justify-between gap-3">
               <Typography.Title level={4} style={{ margin: 0 }} ellipsis={{ tooltip: project.title }}>
                 {project.title}
               </Typography.Title>
-              <Space className="flex-shrink-0">
+              <div className="studio-project-actions flex flex-wrap items-center gap-2">
                 <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/')} title="返回作品库" />
                 <PresetSelect projectId={projectId} value={project.stylePresetId} presets={presets ?? []} />
                 <Button icon={<EditOutlined />} onClick={() => setInfoModalOpen(true)}>
                   编辑信息
                 </Button>
-              </Space>
+              </div>
             </div>
             {project.tagline && (
               <Typography.Text type="secondary" ellipsis={{ tooltip: project.tagline }}>
@@ -95,7 +91,7 @@ export function ProjectDetail() {
             {tagList.length > 0 && (
               <Space size={4} wrap>
                 {tagList.map((t) => (
-                  <Tag key={t} bordered={false} style={{ marginRight: 0, background: '#eef2ff', color: '#6366f1' }}>
+                  <Tag key={t} bordered={false} style={{ marginRight: 0, background: '#f0efff', color: '#6056c8' }}>
                     #{t}
                   </Tag>
                 ))}
@@ -122,7 +118,7 @@ export function ProjectDetail() {
       </Card>
 
       {/* 三个工作区改为 Tab */}
-      <Card styles={{ body: { paddingTop: 4 } }}>
+      <Card className="studio-project-tabs" styles={{ body: { paddingTop: 4 } }}>
         <Tabs
           activeKey={tabKey}
           onChange={setTabKey}
@@ -688,7 +684,7 @@ function AssetsTab({ projectId, project, assets, category, onCategoryChange, onE
       </div>
 
       {list.length > 0 && (
-        <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-indigo-50/60 border border-indigo-100">
+        <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-[#f5f3ff] border border-[#e8e4fb]">
           <Checkbox
             checked={selected.size > 0 && selected.size === list.length}
             indeterminate={selected.size > 0 && selected.size < list.length}
@@ -723,8 +719,8 @@ function AssetsTab({ projectId, project, assets, category, onCategoryChange, onE
             const generating = asset.genStatus === 1;
             const checked = selected.has(asset.id);
             return (
-              <div key={asset.id} className={`p-2 rounded-xl border bg-white transition flex flex-col ${checked ? 'border-indigo-500 ring-1 ring-indigo-200' : 'border-gray-200 hover:border-indigo-400 hover:shadow-sm'}`}>
-                <div className="relative rounded-lg overflow-hidden bg-gray-50 aspect-[3/4] flex items-center justify-center">
+              <div key={asset.id} className={`p-2 rounded-xl border bg-white transition flex flex-col ${checked ? 'border-[#8073d8] ring-1 ring-[#d7d1f8]' : 'border-[#e9e7f0] hover:border-[#aaa1e9] hover:shadow-sm'}`}>
+                <div className="relative rounded-lg overflow-hidden bg-[#f3f2f7] aspect-[3/4] flex items-center justify-center">
                   <div className="absolute top-1.5 left-1.5 z-10">
                     <Checkbox checked={checked} onChange={(e) => toggle(asset.id, e.target.checked)} />
                   </div>

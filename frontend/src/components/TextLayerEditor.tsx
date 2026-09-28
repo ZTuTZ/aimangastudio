@@ -252,7 +252,7 @@ export function TextLayerEditor({ projectId, page }: { projectId: number; page: 
   const stale = (page.scriptVersion ?? 1) > sourceVersion && elements.length > 0;
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="studio-text-editor flex flex-col gap-3">
       {stale && (
         <Alert
           type="warning"
@@ -266,13 +266,13 @@ export function TextLayerEditor({ projectId, page }: { projectId: number; page: 
           description={<div className="text-xs flex flex-col gap-0.5">{warnings.slice(0, 6).map((w, i) => <span key={i}>· {w}</span>)}</div>} />
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-[240px_1fr_260px] gap-3">
+      <div className="grid grid-cols-1 xl:grid-cols-[220px_minmax(0,1fr)_240px] gap-3">
         {/* 元素列表 */}
-        <div className="flex flex-col gap-1 max-h-[520px] overflow-auto">
+        <div className="studio-editor-pane flex flex-col gap-1 max-h-[520px] overflow-auto">
           {elements.map((el) => (
             <div
               key={el.uid}
-              className={`p-2 rounded-lg border cursor-pointer text-xs ${selectedUid === el.uid ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 bg-white hover:border-indigo-300'}`}
+              className={`p-2 rounded-lg border cursor-pointer text-xs ${selectedUid === el.uid ? 'border-[#8073d8] bg-[#f1efff]' : 'border-[#e8e6f0] bg-white hover:border-[#b5aee8]'}`}
               onClick={() => setSelectedUid(el.uid)}
             >
               <div className="flex items-center gap-1">
@@ -288,7 +288,7 @@ export function TextLayerEditor({ projectId, page }: { projectId: number; page: 
         </div>
 
         {/* 预览区 */}
-        <div className="overflow-auto flex justify-center bg-gray-100 rounded-lg p-2">
+        <div className="studio-editor-canvas overflow-auto flex justify-center rounded-xl p-3">
           <div
             ref={wrapRef}
             className="relative select-none shadow-md"
@@ -345,15 +345,15 @@ export function TextLayerEditor({ projectId, page }: { projectId: number; page: 
                   {/* 缩放手柄 */}
                   {selectedEl && (
                     <div
-                      className="absolute -bottom-1 -right-1 w-3 h-3 bg-indigo-500 border border-white rounded-sm cursor-nwse-resize"
+                      className="absolute -bottom-1 -right-1 w-3 h-3 bg-[#6056c8] border border-white rounded-sm cursor-nwse-resize"
                       onPointerDown={(e) => startDrag(e, el, 'resize')}
                     />
                   )}
                   {selectedEl && (
-                    <div className="absolute -top-5 left-0 text-[10px] bg-indigo-500 text-white px-1 rounded">{el.uid}</div>
+                    <div className="absolute -top-5 left-0 text-[10px] bg-[#6056c8] text-white px-1 rounded">{el.uid}</div>
                   )}
                   {selectedEl && (
-                    <div className="absolute inset-0 border-2 border-dashed border-indigo-400 pointer-events-none rounded" />
+                    <div className="absolute inset-0 border-2 border-dashed border-[#8b80df] pointer-events-none rounded" />
                   )}
                 </div>
               );
@@ -362,7 +362,7 @@ export function TextLayerEditor({ projectId, page }: { projectId: number; page: 
         </div>
 
         {/* 编辑面板 */}
-        <div className="flex flex-col gap-2">
+        <div className="studio-editor-pane flex flex-col gap-2">
           {selected ? (
             <>
               <Space wrap>

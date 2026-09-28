@@ -82,16 +82,20 @@ export function UserManage() {
   ];
 
   return (
-    <div className="bg-white rounded-xl border border-[#eef0f4] p-6">
-      <div className="flex items-center justify-between mb-4">
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          账号管理
-        </Typography.Title>
+    <div className="studio-page">
+      <div className="studio-page-header">
+        <div>
+          <span className="studio-page-kicker">ADMINISTRATION</span>
+          <Typography.Title level={4} style={{ margin: 0 }}>账号管理</Typography.Title>
+          <span className="studio-page-description">创建账号、管理权限与登录状态。</span>
+        </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
           创建账号
         </Button>
       </div>
-      <Table<UserRow> rowKey="id" columns={columns} dataSource={data ?? []} loading={isLoading} pagination={false} />
+      <section className="studio-panel">
+        <Table<UserRow> rowKey="id" columns={columns} dataSource={data ?? []} loading={isLoading} pagination={false} />
+      </section>
 
       <CreateUserModal
         open={createOpen}
